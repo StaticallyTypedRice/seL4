@@ -34,7 +34,11 @@ NORETURN;
 void fastpath_call(word_t cptr, word_t r_msgInfo)
 NORETURN;
 
+#ifdef CONFIG_KERNEL_MCS
+void fastpath_reply_recv(word_t cptr, word_t r_msgInfo, word_t reply)
+#else
 void fastpath_reply_recv(word_t cptr, word_t r_msgInfo)
+#endif
 NORETURN;
 
 /* Use macros to not break verification */
@@ -103,6 +107,13 @@ static inline void NORETURN fastpath_restore(word_t badge, word_t msgInfo, tcb_t
 {
     NODE_UNLOCK_IF_HELD;
 
+#ifdef ENABLE_SMP_SUPPORT
+    word_t sp;
+    asm volatile("csrr %0, sscratch" : "=r"(sp));
+    sp -= sizeof(word_t);
+    *((word_t *)sp) = TCB_REF(cur_thread);
+#endif
+
     c_exit_hook();
 
     register word_t badge_reg asm("a0") = badge;
@@ -145,10 +156,10 @@ static inline void NORETURN fastpath_restore(word_t badge, word_t msgInfo, tcb_t
         /* get sepc */
         LOAD_S "  t1, (34*%[REGSIZE])(t0)\n"
         "csrw sepc, t1  \n"
-
+#ifndef ENABLE_SMP_SUPPORT
         /* Write back sscratch with cur_thread_reg to get it back on the next trap entry */
         "csrw sscratch, t0\n"
-
+#endif
         LOAD_S "  t1, (32*%[REGSIZE])(t0) \n"
         "csrw sstatus, t1\n"
 

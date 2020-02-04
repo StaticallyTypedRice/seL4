@@ -32,7 +32,8 @@ endif()
 include(tools/internal.cmake)
 
 # Define tools used by the kernel
-set(PYTHON "python" CACHE INTERNAL "")
+set(PYTHON "python2" CACHE INTERNAL "")
+set(PYTHON3 "python3" CACHE INTERNAL "")
 RequireTool(CPP_GEN_PATH cpp_gen.sh)
 RequireTool(CIRCULAR_INCLUDES circular_includes.py)
 RequireTool(BF_GEN_PATH bitfield_gen.py)
@@ -310,6 +311,9 @@ list(APPEND gen_files_list "${header_dest}")
 
 set(syscall_xml_base "${CMAKE_CURRENT_SOURCE_DIR}/libsel4/include/api")
 set(syscall_dest "gen_headers/arch/api/syscall.h")
+if(KernelIsMCS)
+    set(mcs --mcs)
+endif()
 add_custom_command(
     OUTPUT ${syscall_dest}
     COMMAND
@@ -319,9 +323,9 @@ add_custom_command(
     COMMAND
         ${CMAKE_COMMAND} -E remove -f "${syscall_dest}"
     COMMAND
-        ${PYTHON} "${SYSCALL_ID_GEN_PATH}"
+        ${PYTHON3} "${SYSCALL_ID_GEN_PATH}"
         --xml "${syscall_xml_base}/syscall.xml"
-        --kernel_header "${syscall_dest}"
+        --kernel_header "${syscall_dest}" ${mcs}
     DEPENDS
         "${XMLLINT_PATH}"
         "${SYSCALL_ID_GEN_PATH}"

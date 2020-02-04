@@ -1,5 +1,5 @@
 /*
- * Copyright 2018, Data61
+ * Copyright 2019, Data61
  * Commonwealth Scientific and Industrial Research Organisation (CSIRO)
  * ABN 41 687 119 230.
  *
@@ -12,6 +12,14 @@
 
 / {
 
-	/* This platform doesn't use the arm generic timer for the kernel timer. */
-	/delete-node/ timer;
+    /* 32-bit kernel platforms require memory to be clamped to the top of
+     * the kernel window.
+     */
+	memory@40000000 {
+		device_type = "memory";
+		reg = < 0x00 0x40000000 0x00 0x1f000000 >;
+	};
+
+	/* This device extends out of the 32-bit memory range.*/
+	/delete-node/gpu@38000000;
 };

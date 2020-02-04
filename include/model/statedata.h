@@ -70,6 +70,14 @@ NODE_STATE_DECLARE(tcb_t, *ksCurThread);
 NODE_STATE_DECLARE(tcb_t, *ksIdleThread);
 NODE_STATE_DECLARE(tcb_t, *ksSchedulerAction);
 
+#ifdef CONFIG_KERNEL_MCS
+NODE_STATE_DECLARE(tcb_t, *ksReleaseHead);
+NODE_STATE_DECLARE(time_t, ksConsumed);
+NODE_STATE_DECLARE(time_t, ksCurTime);
+NODE_STATE_DECLARE(bool_t, ksReprogram);
+NODE_STATE_DECLARE(sched_context_t, *ksCurSC);
+#endif
+
 #ifdef CONFIG_HAVE_FPU
 /* Current state installed in the FPU, or NULL if the FPU is currently invalid */
 NODE_STATE_DECLARE(user_fpu_state_t *, ksActiveFPUState);
@@ -84,17 +92,31 @@ NODE_STATE_END(nodeState);
 
 extern word_t ksNumCPUs;
 
+#if defined ENABLE_SMP_SUPPORT && defined CONFIG_ARCH_ARM
+#define INT_STATE_ARRAY_SIZE ((CONFIG_MAX_NUM_NODES - 1) * NUM_PPI + maxIRQ + 1)
+#else
+#define INT_STATE_ARRAY_SIZE (maxIRQ + 1)
+#endif
 extern word_t ksWorkUnitsCompleted;
 extern irq_state_t intStateIRQTable[];
 extern cte_t intStateIRQNode[];
+
 extern const dschedule_t ksDomSchedule[];
 extern const word_t ksDomScheduleLength;
 extern word_t ksDomScheduleIdx;
 extern dom_t ksCurDomain;
+#ifdef CONFIG_KERNEL_MCS
+extern ticks_t ksDomainTime;
+#else
 extern word_t ksDomainTime;
+#endif
 extern word_t tlbLockCount VISIBLE;
 
 extern char ksIdleThreadTCB[CONFIG_MAX_NUM_NODES][BIT(seL4_TCBBits)];
+
+#ifdef CONFIG_KERNEL_MCS
+extern char ksIdleThreadSC[CONFIG_MAX_NUM_NODES][BIT(seL4_MinSchedContextBits)];
+#endif
 
 #ifdef CONFIG_BENCHMARK_USE_KERNEL_LOG_BUFFER
 extern paddr_t ksUserLogBuffer;

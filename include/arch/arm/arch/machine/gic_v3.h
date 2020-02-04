@@ -30,28 +30,11 @@
 
 #include "gic_common.h"
 
-/* Special IRQ's */
-#define SPECIAL_IRQ_START 1020u
-#define IRQ_NONE          1023u
-
-#define NR_GIC_LOCAL_IRQS  32
-#define NR_GIC_SGI         16
-
-#define GIC_SGI_START            (0)
-#define GIC_SGI_END              (15)
-#define GIC_PPI_START            (16)
-#define GIC_PPI_END              (31)
-
-
 #define GIC_PRI_LOWEST     0xf0
 #define GIC_PRI_IRQ        0xa0
 #define GIC_PRI_HIGHEST    0x80 /* Higher priorities belong to Secure-World */
 
-/* Setters/getters helpers */
-#define IRQ_REG(IRQ) ((IRQ) >> 5u)
-#define IRQ_BIT(IRQ) ((IRQ) & 0x1f)
 #define IRQ_MASK MASK(16u)
-#define IS_IRQ_VALID(X) (((X) & IRQ_MASK) < SPECIAL_IRQ_START)
 
 /* Register bits */
 #define GICD_CTL_ENABLE 0x1
@@ -73,6 +56,7 @@
 #define DEFAULT_PMR_VALUE            0xff
 
 /* System registers for GIC CPU interface */
+#ifdef CONFIG_ARCH_AARCH64
 #define ICC_IAR1_EL1    "S3_0_C12_C12_0"
 #define ICC_EOIR1_EL1   "S3_0_C12_C12_1"
 #define ICC_HPPIR1_EL1  "S3_0_C12_C12_2"
@@ -82,6 +66,19 @@
 #define ICC_CTLR_EL1    "S3_0_C12_C12_4"
 #define ICC_IGRPEN1_EL1 "S3_0_C12_C12_7"
 #define ICC_SRE_EL1     "S3_0_C12_C12_5"
+#define MPIDR           "mpidr_el1"
+#else
+#define ICC_IAR1_EL1    " p15, 0,  %0, c12,  c12, 0"
+#define ICC_EOIR1_EL1   " p15, 0,  %0, c12,  c12, 1"
+#define ICC_HPPIR1_EL1  " p15, 0,  %0, c12,  c12, 2"
+#define ICC_BPR1_EL1    " p15, 0,  %0, c12,  c12, 3"
+#define ICC_DIR_EL1     " p15, 0,  %0, c12,  c11, 1"
+#define ICC_PMR_EL1     " p15, 0,  %0, c4,  c6, 0"
+#define ICC_CTLR_EL1    " p15, 0,  %0, c12,  c12, 4"
+#define ICC_IGRPEN1_EL1 " p15, 0,  %0, c12,  c12, 7"
+#define ICC_SRE_EL1     " p15, 0,  %0, c12,  c12, 5"
+#define MPIDR           " p15, 0,  %0, c0,  c0, 5"
+#endif
 
 /* Memory map for GIC distributor */
 struct gic_dist_map {
@@ -178,17 +175,6 @@ extern volatile struct gic_dist_map *const gic_dist;
 extern volatile struct gic_rdist_map *gic_rdist_map[CONFIG_MAX_NUM_NODES];
 extern volatile struct gic_rdist_sgi_ppi_map *gic_rdist_sgi_ppi_map[CONFIG_MAX_NUM_NODES];
 
-
-static inline bool_t is_sgi(irq_t irq)
-{
-    return (irq >= GIC_SGI_START) && (irq <= GIC_SGI_END);
-}
-
-static inline bool_t is_ppi(irq_t irq)
-{
-    return (irq >= GIC_PPI_START) && (irq <= GIC_PPI_END);
-}
-
 /* Helpers */
 static inline int is_irq_edge_triggered(irq_t irq)
 {
@@ -196,10 +182,10 @@ static inline int is_irq_edge_triggered(irq_t irq)
     int word = irq >> 4;
     int bit = ((irq & 0xf) * 2);
 
-    if (is_sgi(irq)) {
+    if (HW_IRQ_IS_SGI(irq)) {
         return 0;
     }
-    if (is_ppi(irq)) {
+    if (HW_IRQ_IS_PPI(irq)) {
         icfgr = gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->icfgr1;
     } else {
         icfgr = gic_dist->icfgrn[word];
@@ -214,7 +200,7 @@ static inline void gic_pending_clr(irq_t irq)
     int bit = IRQ_BIT(irq);
     /* Using |= here is detrimental to your health */
     /* Applicable for SPI and PPIs */
-    if (irq < NR_GIC_LOCAL_IRQS) {
+    if (irq < SPI_START) {
         gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->icpendr0 = BIT(bit);
     } else {
         gic_dist->icpendrn[word] = BIT(bit);
@@ -226,7 +212,7 @@ static inline void gic_enable_clr(irq_t irq)
     int word = IRQ_REG(irq);
     int bit = IRQ_BIT(irq);
     /* Using |= here is detrimental to your health */
-    if (irq < NR_GIC_LOCAL_IRQS) {
+    if (irq < SPI_START) {
         gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->icenabler0 = BIT(bit);
     } else {
         gic_dist->icenablern[word] = BIT(bit);
@@ -239,7 +225,7 @@ static inline void gic_enable_set(irq_t irq)
     int word = IRQ_REG(irq);
     int bit = IRQ_BIT(irq);
 
-    if (irq < NR_GIC_LOCAL_IRQS) {
+    if (irq < SPI_START) {
         gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->isenabler0 = BIT(bit);
     } else {
         gic_dist->isenablern[word] = BIT(bit);
@@ -258,7 +244,7 @@ static inline interrupt_t getActiveIRQ(void)
     }
 
     if (IS_IRQ_VALID(active_irq[CURRENT_CPU_INDEX()])) {
-        irq = active_irq[CURRENT_CPU_INDEX()] & IRQ_MASK;
+        irq = CORE_IRQ_TO_IDX(CURRENT_CPU_INDEX(), active_irq[CURRENT_CPU_INDEX()] & IRQ_MASK);
     } else {
         irq = irqInvalid;
     }
@@ -281,18 +267,24 @@ static inline bool_t isIRQPending(void)
 
 static inline void maskInterrupt(bool_t disable, interrupt_t irq)
 {
+#if defined ENABLE_SMP_SUPPORT
+    assert(!(IRQ_IS_PPI(irq)) || (IDX_TO_CORE(irq) == getCurrentCPUIndex()));
+#endif
+
     if (disable) {
-        gic_enable_clr(irq);
+        gic_enable_clr(IDX_TO_IRQ(irq));
     } else {
-        gic_enable_set(irq);
+        gic_enable_set(IDX_TO_IRQ(irq));
     }
 }
 
 static inline void ackInterrupt(irq_t irq)
 {
-    assert(IS_IRQ_VALID(active_irq[CURRENT_CPU_INDEX()]) && (active_irq[CURRENT_CPU_INDEX()] & IRQ_MASK) == irq);
-    if (is_irq_edge_triggered(irq)) {
-        gic_pending_clr(irq);
+    irq_t hw_irq = IDX_TO_IRQ(irq);
+    assert(IS_IRQ_VALID(active_irq[CURRENT_CPU_INDEX()]) && (active_irq[CURRENT_CPU_INDEX()] & IRQ_MASK) == hw_irq);
+
+    if (is_irq_edge_triggered(hw_irq)) {
+        gic_pending_clr(hw_irq);
     }
 
     /* Set End of Interrupt for active IRQ: ICC_EOIR1_EL1 */
@@ -304,6 +296,7 @@ static inline void ackInterrupt(irq_t irq)
 #ifdef ENABLE_SMP_SUPPORT
 void ipiBroadcast(irq_t irq, bool_t includeSelfCPU);
 void ipi_send_target(irq_t irq, word_t cpuTargetList);
+void setIRQTarget(irq_t irq, seL4_Word target);
 #endif /* ENABLE_SMP_SUPPORT */
 
 #endif /* ARCH_MACHINE_GIC_3_H */

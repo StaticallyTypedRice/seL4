@@ -15,6 +15,44 @@
 #include <machine/io.h>
 #include <arch/machine.h>
 
+#ifdef CONFIG_KERNEL_MCS
+void handleFault(tcb_t *tptr)
+{
+    bool_t hasFaultHandler = sendFaultIPC(tptr, TCB_PTR_CTE_PTR(tptr, tcbFaultHandler)->cap,
+                                          tptr->tcbSchedContext != NULL);
+    if (!hasFaultHandler) {
+        handleNoFaultHandler(tptr);
+    }
+}
+
+void handleTimeout(tcb_t *tptr)
+{
+    assert(validTimeoutHandler(tptr));
+    sendFaultIPC(tptr, TCB_PTR_CTE_PTR(tptr, tcbTimeoutHandler)->cap, false);
+}
+
+bool_t sendFaultIPC(tcb_t *tptr, cap_t handlerCap, bool_t can_donate)
+{
+    if (cap_get_capType(handlerCap) == cap_endpoint_cap) {
+        assert(cap_endpoint_cap_get_capCanSend(handlerCap));
+        assert(cap_endpoint_cap_get_capCanGrant(handlerCap));
+
+        tptr->tcbFault = current_fault;
+        sendIPC(true, false,
+                cap_endpoint_cap_get_capEPBadge(handlerCap),
+                cap_endpoint_cap_get_capCanGrant(handlerCap),
+                cap_endpoint_cap_get_capCanGrantReply(handlerCap),
+                can_donate, tptr,
+                EP_PTR(cap_endpoint_cap_get_capEPPtr(handlerCap)));
+
+        return true;
+    } else {
+        assert(cap_get_capType(handlerCap) == cap_null_cap);
+        return false;
+    }
+}
+#else
+
 void handleFault(tcb_t *tptr)
 {
     exception_t status;
@@ -64,6 +102,7 @@ exception_t sendFaultIPC(tcb_t *tptr)
         return EXCEPTION_FAULT;
     }
 }
+#endif
 
 #ifdef CONFIG_PRINTING
 static void print_fault(seL4_Fault_t f)
@@ -92,6 +131,11 @@ static void print_fault(seL4_Fault_t f)
                (void *)seL4_Fault_UserException_get_number(f),
                (void *)seL4_Fault_UserException_get_code(f));
         break;
+#ifdef CONFIG_KERNEL_MCS
+    case seL4_Fault_Timeout:
+        printf("Timeout fault for 0x%x\n", (unsigned int) seL4_Fault_Timeout_get_badge(f));
+        break;
+#endif
     default:
         printf("unknown fault");
         break;
@@ -99,16 +143,24 @@ static void print_fault(seL4_Fault_t f)
 }
 #endif
 
+#ifdef CONFIG_KERNEL_MCS
+void handleNoFaultHandler(tcb_t *tptr)
+#else
 /* The second fault, ex2, is stored in the global current_fault */
 void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
+#endif
 {
 #ifdef CONFIG_PRINTING
+#ifdef CONFIG_KERNEL_MCS
+    printf("Found thread has no fault handler while trying to handle:\n");
+    print_fault(current_fault);
+#else
     seL4_Fault_t ex2 = current_fault;
     printf("Caught ");
     print_fault(ex2);
     printf("\nwhile trying to handle:\n");
     print_fault(ex1);
-
+#endif
 #ifdef CONFIG_DEBUG_BUILD
     printf("\nin thread %p \"%s\" ", tptr, tptr->tcbName);
 #endif /* CONFIG_DEBUG_BUILD */

@@ -23,8 +23,20 @@
 #endif
 
 /* number of timer ticks until a thread is preempted  */
+#ifndef CONFIG_KERNEL_MCS
 #ifndef CONFIG_TIME_SLICE
 #define CONFIG_TIME_SLICE 5
+#endif
+#endif
+
+#ifdef CONFIG_KERNEL_MCS
+#ifndef CONFIG_BOOT_THREAD_TIME_SLICE
+#define CONFIG_BOOT_THREAD_TIME_SLICE 5
+#endif
+
+#ifndef CONFIG_KERNEL_WCET_SCALE
+#define CONFIG_KERNEL_WCET_SCALE 1
+#endif
 #endif
 
 /* the number of scheduler domains */
@@ -64,9 +76,11 @@
 #define CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS 166
 #endif
 
+#ifndef CONFIG_KERNEL_MCS
 /* length of a timer tick in ms  */
 #ifndef CONFIG_TIMER_TICK_MS
 #define CONFIG_TIMER_TICK_MS 2
+#endif
 #endif
 
 /* maximum number of different tracepoints which can be placed in the kernel */
@@ -87,6 +101,12 @@
 /* Alias CONFIG_MAX_NUM_NODES > 1 to ENABLE_SMP_SUPPORT */
 #if CONFIG_MAX_NUM_NODES > 1
 #define ENABLE_SMP_SUPPORT
+#endif
+
+#ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
+#ifdef CONFIG_ARM_PA_SIZE_BITS_40
+#define AARCH64_VSPACE_S2_START_L1
+#endif
 #endif
 
 #endif /* __CONFIG_H */

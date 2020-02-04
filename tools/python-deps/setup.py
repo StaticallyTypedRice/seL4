@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Copyright 2017, Data61
 # Commonwealth Scientific and Industrial Research Organisation (CSIRO)
@@ -33,19 +33,21 @@ DEPS = [
     'ply',
     'psutil',
     'bs4',
+    'pyelftools',
     'sh',
     'pexpect',
-    'pyaml',
+    'pyyaml>=5.1',
     'jsonschema',
     'pyfdt',
     'cmake-format==0.4.5',
     'guardonce',
-    'autopep8==1.4.3'
+    'autopep8==1.4.3',
+    'libarchive-c',
 ]
 
 setup(
     name='sel4-deps',
-    version='0.2.4',
+    version='0.4.0',
     description='Metapackage for downloading build dependencies for the seL4 microkernel',
     url="https://sel4.systems",
     licence='BSD2',

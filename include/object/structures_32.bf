@@ -51,6 +51,21 @@ block notification_cap {
     field capType 4
 }
 
+#ifdef CONFIG_KERNEL_MCS
+block reply_cap {
+    field capReplyPtr 32
+
+    padding 27
+    field capReplyCanGrant 1
+    field capType 4
+}
+
+block call_stack {
+    field_high callStackPtr 28
+    padding 3
+    field isHead 1
+}
+#else
 block reply_cap(capReplyCanGrant, capReplyMaster, capTCBPtr, capType) {
     padding 32
 
@@ -59,7 +74,7 @@ block reply_cap(capReplyCanGrant, capReplyMaster, capTCBPtr, capType) {
     field capReplyMaster 1
     field capType 4
 }
-
+#endif
 -- The user-visible format of the data word is defined by cnode_capdata, below.
 block cnode_cap(capCNodeRadix, capCNodeGuardSize, capCNodeGuard,
                 capCNodePtr, capType) {
@@ -88,8 +103,12 @@ block irq_control_cap {
 }
 
 block irq_handler_cap {
-    padding       24
-    field capIRQ   8
+#ifdef ENABLE_SMP_SUPPORT
+    field capIRQ   32
+#else
+    padding 24
+    field capIRQ 8
+#endif
 
     padding       24
     field capType  8
@@ -110,6 +129,23 @@ block domain_cap {
     field capType 8
 }
 
+#ifdef CONFIG_KERNEL_MCS
+block sched_context_cap {
+    field_high capSCPtr 28
+    padding              4
+
+    padding             18
+    field capSCSizeBits  6
+    field capType        8
+}
+
+block sched_control_cap {
+    field core    32
+
+    padding       24
+    field capType 8
+}
+#endif
 ---- Arch-independent object types
 
 -- Endpoint: size = 16 bytes
@@ -124,8 +160,15 @@ block endpoint {
     field state 2
 }
 
--- Notification object: size = 16 bytes
+-- Notification object: size = 16 bytes (32 bytes on mcs)
 block notification {
+#ifdef CONFIG_KERNEL_MCS
+    padding 96
+
+    field_high ntfnSchedContext 28
+    padding 4
+#endif
+
     field_high ntfnBoundTCB 28
     padding 4
 
@@ -272,10 +315,21 @@ block DebugException {
 }
 #endif
 
+#ifdef CONFIG_KERNEL_MCS
+block Timeout {
+    field badge 32
+    padding 28
+    field seL4_FaultType 4
+}
+#endif
+
 -- Thread state: size = 12 bytes
 block thread_state(blockingIPCBadge, blockingIPCCanGrant,
                    blockingIPCCanGrantReply, blockingIPCIsCall,
                    tcbQueued, blockingObject,
+#ifdef CONFIG_KERNEL_MCS
+                   tcbInReleaseQueue, replyObject,
+#endif
                    tsType) {
     field blockingIPCBadge 28
     field blockingIPCCanGrant 1
@@ -284,11 +338,18 @@ block thread_state(blockingIPCBadge, blockingIPCCanGrant,
     padding 1
 
     -- this is fastpath-specific. it is useful to be able to write
-    -- tsType and without changing tcbQueued
+    -- tsType and without changing tcbQueued or tcbInReleaseQueue
+#ifdef CONFIG_KERNEL_MCS
+    field_high replyObject 28
+    padding 2
+#else
     padding 31
+#endif
     field tcbQueued 1
+#ifdef CONFIG_KERNEL_MCS
+    field tcbInReleaseQueue 1
+#endif
 
     field_high blockingObject 28
     field tsType 4
 }
-

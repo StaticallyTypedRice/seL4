@@ -17,6 +17,7 @@
 #include <autoconf.h>
 #endif
 
+#ifndef __ASSEMBLER__
 #define LIBSEL4_BIT(n) (1ul<<(n))
 
 #ifdef CONFIG_HARDWARE_DEBUG_API
@@ -78,5 +79,28 @@ typedef enum {
     seL4_GuardMismatch,
     SEL4_FORCE_LONG_ENUM(seL4_LookupFailureType),
 } seL4_LookupFailureType;
+#endif /* !__ASSEMBLER__ */
 
+#ifdef CONFIG_KERNEL_MCS
+/* Minimum size of a scheduling context (2^{n} bytes) */
+#define seL4_MinSchedContextBits 8
+#ifndef __ASSEMBLER__
+/* the size of a scheduling context, excluding extra refills */
+#define seL4_CoreSchedContextBytes (10 * sizeof(seL4_Word) + (6 * 8))
+/* the size of a single extra refill */
+#define seL4_RefillSizeBytes (2 * 8)
+
+/*
+ * @brief Calculate the max extra refills a scheduling context can contain for a specific size.
+ *
+ * @param  size of the schedulding context. Must be >= seL4_MinSchedContextBits
+ * @return the max number of extra refills that can be passed to seL4_SchedControl_Configure for
+ *         this scheduling context
+ */
+static inline seL4_Word seL4_MaxExtraRefills(seL4_Word size)
+{
+    return (LIBSEL4_BIT(size) -  seL4_CoreSchedContextBytes) / seL4_RefillSizeBytes;
+}
+#endif /* !__ASSEMBLER__ */
+#endif /* CONFIG_KERNEL_MCS */
 #endif /* __API_CONSTANTS_H */

@@ -27,6 +27,85 @@
 #include <arch/model/statedata.h>
 #include <arch/sbi.h>
 
+#ifdef ENABLE_SMP_SUPPORT
+
+static inline void fence_rw_rw(void)
+{
+    asm volatile("fence rw, rw" ::: "memory");
+}
+
+static inline void fence_w_rw(void)
+{
+    asm volatile("fence w, rw" ::: "memory");
+}
+
+static inline void fence_r_rw(void)
+{
+    asm volatile("fence r,rw" ::: "memory");
+}
+
+static inline void fence_w_r(void)
+{
+    asm volatile("fence w,r" ::: "memory");
+}
+
+static inline void ifence_local(void)
+{
+    asm volatile("fence.i":::"memory");
+}
+
+static inline void sfence_local(void)
+{
+    asm volatile("sfence.vma" ::: "memory");
+}
+
+static inline void ifence(void)
+{
+    ifence_local();
+
+    unsigned long mask = 0;
+    for (int i = 0; i < CONFIG_MAX_NUM_NODES; i++) {
+        if (i != getCurrentCPUIndex()) {
+            mask |= BIT(cpuIndexToID(i));
+        }
+    }
+    sbi_remote_fence_i(&mask);
+}
+
+static inline void sfence(void)
+{
+    fence_w_rw();
+    sfence_local();
+
+    unsigned long mask = 0;
+    for (int i = 0; i < CONFIG_MAX_NUM_NODES; i++) {
+        if (i != getCurrentCPUIndex()) {
+            mask |= BIT(cpuIndexToID(i));
+        }
+    }
+    sbi_remote_sfence_vma(&mask, 0, 0);
+}
+
+static inline void hwASIDFlushLocal(asid_t asid)
+{
+    asm volatile("sfence.vma x0, %0" :: "r"(asid): "memory");
+}
+
+static inline void hwASIDFlush(asid_t asid)
+{
+    hwASIDFlushLocal(asid);
+
+    unsigned long mask = 0;
+    for (int i = 0; i < CONFIG_MAX_NUM_NODES; i++) {
+        if (i != getCurrentCPUIndex()) {
+            mask |= BIT(cpuIndexToID(i));
+        }
+    }
+    sbi_remote_sfence_vma_asid(&mask, 0, 0, asid);
+}
+
+#else
+
 static inline void sfence(void)
 {
     asm volatile("sfence.vma" ::: "memory");
@@ -36,6 +115,8 @@ static inline void hwASIDFlush(asid_t asid)
 {
     asm volatile("sfence.vma x0, %0" :: "r"(asid): "memory");
 }
+
+#endif /* end of !ENABLE_SMP_SUPPORT */
 
 word_t PURE getRestartPC(tcb_t *thread);
 void setNextPC(tcb_t *thread, word_t v);
@@ -124,7 +205,11 @@ static inline void setVSpaceRoot(paddr_t addr, asid_t asid)
     write_sptbr(satp.words[0]);
 
     /* Order read/write operations */
+#ifdef ENABLE_SMP_SUPPORT
+    sfence_local();
+#else
     sfence();
+#endif
 }
 
 static inline void Arch_finaliseInterrupt(void)
@@ -147,12 +232,24 @@ static inline void setInterruptMode(irq_t irq, bool_t levelTrigger, bool_t polar
 void initTimer(void);
 /* L2 cache control */
 void initL2Cache(void);
-
+void initLocalIRQController(void);
 void initIRQController(void);
 void setIRQTrigger(irq_t irq, bool_t trigger);
 
 void handleSpuriousIRQ(void);
 
+#ifdef ENABLE_SMP_SUPPORT
+#define irq_remote_call_ipi     (INTERRUPT_IPI_0)
+#define irq_reschedule_ipi      (INTERRUPT_IPI_1)
+
+static inline void arch_pause(void)
+{
+    // use a memory fence to delay a bit.
+    // other alternatives?
+    fence_rw_rw();
+}
+
+#endif
 void plat_cleanL2Range(paddr_t start, paddr_t end);
 
 void plat_invalidateL2Range(paddr_t start, paddr_t end);

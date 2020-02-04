@@ -26,6 +26,18 @@
 #include <mode/machine_pl2.h>
 #include <mode/hardware.h>
 
+#ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
+#define CNT_TVAL "cnthp_tval_el2"
+#define CNT_CVAL "cnthp_cval_el2"
+#define CNT_CTL  "cnthp_ctl_el2"
+#else
+#define CNT_TVAL "cntv_tval_el0"
+#define CNT_CVAL "cntv_cval_el0"
+#define CNT_CTL  "cntv_ctl_el0"
+#endif
+#define CNTFRQ   "cntfrq_el0"
+#define CNT_CT   "cntvct_el0"
+
 #ifdef ENABLE_SMP_SUPPORT
 /* Use the first two SGI (Software Generated Interrupt) IDs
  * for seL4 IPI implementation. SGIs are per-core banked.
@@ -80,6 +92,18 @@ static inline word_t readTPIDR_EL0(void)
     return reg;
 }
 
+static inline void writeTPIDRRO_EL0(word_t reg)
+{
+    MSR("tpidrro_el0", reg);
+}
+
+static inline word_t readTPIDRRO_EL0(void)
+{
+    word_t reg;
+    MRS("tpidrro_el0", reg);
+    return reg;
+}
+
 static inline void writeTPIDR_EL1(word_t reg)
 {
     MSR("tpidr_el1", reg);
@@ -95,11 +119,13 @@ static inline word_t readTPIDR_EL1(void)
 static void arm_save_thread_id(tcb_t *thread)
 {
     setRegister(thread, TPIDR_EL0, readTPIDR_EL0());
+    setRegister(thread, TPIDRRO_EL0, readTPIDRRO_EL0());
 }
 
 static void arm_load_thread_id(tcb_t *thread)
 {
     writeTPIDR_EL0(getRegister(thread, TPIDR_EL0));
+    writeTPIDRRO_EL0(getRegister(thread, TPIDRRO_EL0));
 }
 
 #define TCR_EL2_RES1 (BIT(23) | BIT(31))
@@ -108,11 +134,25 @@ static void arm_load_thread_id(tcb_t *thread)
 #define TCR_EL2_ORGN0_WBWC  BIT(10)
 #define TCR_EL2_SH0_ISH     (3 << 12)
 #define TCR_EL2_TG0_4K      (0 << 14)
-#define TCR_EL2_TCR_PS_16T  (4 << 16)
 
-/* The default value for TCR_EL2 is for 44-bit PARange. */
+#define TCR_EL2_TCR_PS_4G   0
+#define TCR_EL2_TCR_PS_64G  1
+#define TCR_EL2_TCR_PS_1T   2
+#define TCR_EL2_TCR_PS_4T   3
+#define TCR_EL2_TCR_PS_16T  4
+#define TCR_EL2_TCR_PS_256T 5
+#define TCR_EL2_TCR_PS_4P   6
+#define TCR_EL2_TCR_PS_SHIFT 16
+
+#ifdef AARCH64_VSPACE_S2_START_L1
+#define TCR_EL2_TCR_PS TCR_EL2_TCR_PS_1T
+#else
+#define TCR_EL2_TCR_PS TCR_EL2_TCR_PS_16T
+#endif
+
 #define TCR_EL2_DEFAULT (TCR_EL2_T0SZ | TCR_EL2_IRGN0_WBWC | TCR_EL2_ORGN0_WBWC | \
-                 TCR_EL2_SH0_ISH | TCR_EL2_TG0_4K | TCR_EL2_TCR_PS_16T  | \
+                 TCR_EL2_SH0_ISH | TCR_EL2_TG0_4K | \
+                 (TCR_EL2_TCR_PS << TCR_EL2_TCR_PS_SHIFT) | \
                  TCR_EL2_RES1)
 
 /* Check if the elfloader set up the TCR_EL2 correctly. */
@@ -261,6 +301,7 @@ static inline void invalidateByVA(vptr_t vaddr, paddr_t paddr)
 static inline void invalidateByVA_I(vptr_t vaddr, paddr_t paddr)
 {
     asm volatile("ic ivau, %0" : : "r"(vaddr));
+    dsb();
     isb();
 }
 

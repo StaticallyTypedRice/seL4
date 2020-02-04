@@ -27,6 +27,77 @@ ndks_boot_t ndks_boot BOOT_DATA;
 rootserver_mem_t rootserver BOOT_DATA;
 static region_t rootserver_mem BOOT_DATA;
 
+BOOT_CODE static void merge_regions(void)
+{
+    /* Walk through reserved regions and see if any can be merged */
+    for (word_t i = 1; i < ndks_boot.resv_count;) {
+        if (ndks_boot.reserved[i - 1].end == ndks_boot.reserved[i].start) {
+            /* extend earlier region */
+            ndks_boot.reserved[i - 1].end = ndks_boot.reserved[i].end;
+            /* move everything else down */
+            for (word_t j = i + 1; j < ndks_boot.resv_count; j++) {
+                ndks_boot.reserved[j - 1] = ndks_boot.reserved[j];
+            }
+
+            ndks_boot.resv_count--;
+            /* don't increment i in case there are multiple adjacent regions */
+        } else {
+            i++;
+        }
+    }
+}
+
+BOOT_CODE bool_t reserve_region(p_region_t reg)
+{
+    word_t i;
+    assert(reg.start <= reg.end);
+    if (reg.start == reg.end) {
+        return true;
+    }
+
+    /* keep the regions in order */
+    for (i = 0; i < ndks_boot.resv_count; i++) {
+        /* Try and merge the region to an existing one, if possible */
+        if (ndks_boot.reserved[i].start == reg.end) {
+            ndks_boot.reserved[i].start = reg.start;
+            merge_regions();
+            return true;
+        }
+        if (ndks_boot.reserved[i].end == reg.start) {
+            ndks_boot.reserved[i].end = reg.end;
+            merge_regions();
+            return true;
+        }
+        /* Otherwise figure out where it should go. */
+        if (ndks_boot.reserved[i].start > reg.end) {
+            /* move regions down, making sure there's enough room */
+            if (ndks_boot.resv_count + 1 >= MAX_NUM_RESV_REG) {
+                printf("Can't mark region 0x%lx-0x%lx as reserved, try increasing MAX_NUM_RESV_REG (currently %d)\n",
+                       reg.start, reg.end, (int)MAX_NUM_RESV_REG);
+                return false;
+            }
+            for (word_t j = ndks_boot.resv_count; j > i; j--) {
+                ndks_boot.reserved[j] = ndks_boot.reserved[j - 1];
+            }
+            /* insert the new region */
+            ndks_boot.reserved[i] = reg;
+            ndks_boot.resv_count++;
+            return true;
+        }
+    }
+
+    if (i + 1 == MAX_NUM_RESV_REG) {
+        printf("Can't mark region 0x%lx-0x%lx as reserved, try increasing MAX_NUM_RESV_REG (currently %d)\n",
+               reg.start, reg.end, (int)MAX_NUM_RESV_REG);
+        return false;
+    }
+
+    ndks_boot.reserved[i] = reg;
+    ndks_boot.resv_count++;
+
+    return true;
+}
+
 BOOT_CODE bool_t insert_region(region_t reg)
 {
     word_t i;
@@ -37,6 +108,7 @@ BOOT_CODE bool_t insert_region(region_t reg)
     }
     for (i = 0; i < MAX_NUM_FREEMEM_REG; i++) {
         if (is_reg_empty(ndks_boot.freemem[i])) {
+            reserve_region(pptr_to_paddr_reg(reg));
             ndks_boot.freemem[i] = reg;
             return true;
         }
@@ -85,6 +157,9 @@ BOOT_CODE static word_t calculate_rootserver_size(v_region_t v_reg, word_t extra
     size += BIT(seL4_ASIDPoolBits);
     size += extra_bi_size_bits > 0 ? BIT(extra_bi_size_bits) : 0;
     size += BIT(seL4_VSpaceBits); // root vspace
+#ifdef CONFIG_KERNEL_MCS
+    size += BIT(seL4_MinSchedContextBits); // root sched context
+#endif
     /* for all archs, seL4_PageTable Bits is the size of all non top-level paging structures */
     return size + arch_get_n_paging(v_reg) * BIT(seL4_PageTableBits);
 }
@@ -139,6 +214,10 @@ BOOT_CODE void create_rootserver_objects(pptr_t start, v_region_t v_reg, word_t 
     /* for most archs, TCBs are smaller than page tables */
 #if seL4_TCBBits < seL4_PageTableBits
     rootserver.tcb = alloc_rootserver_obj(seL4_TCBBits, 1);
+#endif
+
+#ifdef CONFIG_KERNEL_MCS
+    rootserver.sc = alloc_rootserver_obj(seL4_MinSchedContextBits, 1);
 #endif
     /* we should have allocated all our memory */
     assert(rootserver_mem.start == rootserver_mem.end);
@@ -227,11 +306,12 @@ BOOT_CODE word_t calculate_extra_bi_size_bits(word_t extra_size)
     }
 
     word_t clzl_ret = clzl(ROUND_UP(extra_size, seL4_PageBits));
+    word_t msb = seL4_WordBits - 1 - clzl_ret;
     /* If region is bigger than a page, make sure we overallocate rather than underallocate */
-    if (extra_size & ((1 << clzl_ret) - 1)) {
-        clzl_ret--;
+    if (extra_size > BIT(msb)) {
+        msb++;
     }
-    return seL4_WordBits - 1 - clzl_ret;
+    return msb;
 }
 
 BOOT_CODE void populate_bi_frame(node_id_t node_id, word_t num_nodes, vptr_t ipcbuf_vptr,
@@ -313,6 +393,39 @@ BOOT_CODE cap_t create_it_asid_pool(cap_t root_cnode_cap)
     return ap_cap;
 }
 
+#ifdef CONFIG_KERNEL_MCS
+BOOT_CODE static bool_t configure_sched_context(tcb_t *tcb, sched_context_t *sc_pptr, ticks_t timeslice)
+{
+    tcb->tcbSchedContext = sc_pptr;
+    refill_new(tcb->tcbSchedContext, MIN_REFILLS, timeslice, 0);
+
+    tcb->tcbSchedContext->scTcb = tcb;
+    return true;
+}
+
+BOOT_CODE bool_t init_sched_control(cap_t root_cnode_cap, word_t num_nodes)
+{
+    bool_t ret = true;
+    seL4_SlotPos slot_pos_before = ndks_boot.slot_pos_cur;
+    /* create a sched control cap for each core */
+    for (int i = 0; i < num_nodes && ret; i++) {
+        ret = provide_cap(root_cnode_cap, cap_sched_control_cap_new(i));
+    }
+
+    if (!ret) {
+        return false;
+    }
+
+    /* update boot info with slot region for sched control caps */
+    ndks_boot.bi_frame->schedcontrol = (seL4_SlotRegion) {
+        .start = slot_pos_before,
+        .end = ndks_boot.slot_pos_cur
+    };
+
+    return true;
+}
+#endif
+
 BOOT_CODE bool_t create_idle_thread(void)
 {
     pptr_t pptr;
@@ -327,6 +440,16 @@ BOOT_CODE bool_t create_idle_thread(void)
         setThreadName(NODE_STATE_ON_CORE(ksIdleThread, i), "idle_thread");
 #endif
         SMP_COND_STATEMENT(NODE_STATE_ON_CORE(ksIdleThread, i)->tcbAffinity = i);
+#ifdef CONFIG_KERNEL_MCS
+        bool_t result = configure_sched_context(NODE_STATE_ON_CORE(ksIdleThread, i),
+                                                SC_PTR(&ksIdleThreadSC[SMP_TERNARY(i, 0)]),
+                                                usToTicks(CONFIG_BOOT_THREAD_TIME_SLICE * US_IN_MS));
+        SMP_COND_STATEMENT(NODE_STATE_ON_CORE(ksIdleThread, i)->tcbSchedContext->scCore = i;)
+        if (!result) {
+            printf("Kernel init failed: Unable to allocate sc for idle thread\n");
+            return false;
+        }
+#endif
 #ifdef ENABLE_SMP_SUPPORT
     }
 #endif /* ENABLE_SMP_SUPPORT */
@@ -337,7 +460,10 @@ BOOT_CODE tcb_t *create_initial_thread(cap_t root_cnode_cap, cap_t it_pd_cap, vp
                                        vptr_t ipcbuf_vptr, cap_t ipcbuf_cap)
 {
     tcb_t *tcb = TCB_PTR(rootserver.tcb + TCB_OFFSET);
+#ifndef CONFIG_KERNEL_MCS
     tcb->tcbTimeSlice = CONFIG_TIME_SLICE;
+#endif
+
     Arch_initContext(&tcb->tcbArch.tcbContext);
 
     /* derive a copy of the IPC buffer cap for inserting */
@@ -369,21 +495,39 @@ BOOT_CODE tcb_t *create_initial_thread(cap_t root_cnode_cap, cap_t it_pd_cap, vp
     setNextPC(tcb, ui_v_entry);
 
     /* initialise TCB */
+#ifdef CONFIG_KERNEL_MCS
+    if (!configure_sched_context(tcb, SC_PTR(rootserver.sc), usToTicks(CONFIG_BOOT_THREAD_TIME_SLICE * US_IN_MS))) {
+        return NULL;
+    }
+#endif
+
     tcb->tcbPriority = seL4_MaxPrio;
     tcb->tcbMCP = seL4_MaxPrio;
+#ifndef CONFIG_KERNEL_MCS
     setupReplyMaster(tcb);
+#endif
     setThreadState(tcb, ThreadState_Running);
 
     ksCurDomain = ksDomSchedule[ksDomScheduleIdx].domain;
+#ifdef CONFIG_KERNEL_MCS
+    ksDomainTime = usToTicks(ksDomSchedule[ksDomScheduleIdx].length * US_IN_MS);
+#else
     ksDomainTime = ksDomSchedule[ksDomScheduleIdx].length;
+#endif
     assert(ksCurDomain < CONFIG_NUM_DOMAINS && ksDomainTime > 0);
 
+#ifndef CONFIG_KERNEL_MCS
     SMP_COND_STATEMENT(tcb->tcbAffinity = 0);
+#endif
 
     /* create initial thread's TCB cap */
     cap_t cap = cap_thread_cap_new(TCB_REF(tcb));
     write_slot(SLOT_PTR(pptr_of_cap(root_cnode_cap), seL4_CapInitThreadTCB), cap);
 
+#ifdef CONFIG_KERNEL_MCS
+    cap = cap_sched_context_cap_new(SC_REF(tcb->tcbSchedContext), seL4_MinSchedContextBits);
+    write_slot(SLOT_PTR(pptr_of_cap(root_cnode_cap), seL4_CapInitThreadSC), cap);
+#endif
 #ifdef CONFIG_DEBUG_BUILD
     setThreadName(tcb, "rootserver");
 #endif
@@ -407,6 +551,13 @@ BOOT_CODE void init_core_state(tcb_t *scheduler_action)
 #endif
     NODE_STATE(ksSchedulerAction) = scheduler_action;
     NODE_STATE(ksCurThread) = NODE_STATE(ksIdleThread);
+#ifdef CONFIG_KERNEL_MCS
+    NODE_STATE(ksCurSC) = NODE_STATE(ksCurThread->tcbSchedContext);
+    NODE_STATE(ksConsumed) = 0;
+    NODE_STATE(ksReprogram) = true;
+    NODE_STATE(ksReleaseHead) = NULL;
+    NODE_STATE(ksCurTime) = getCurrentTime();
+#endif
 }
 
 BOOT_CODE static bool_t provide_untyped_cap(
@@ -422,7 +573,7 @@ BOOT_CODE static bool_t provide_untyped_cap(
     word_t i = ndks_boot.slot_pos_cur - first_untyped_slot;
     if (i < CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS) {
         ndks_boot.bi_frame->untypedList[i] = (seL4_UntypedDesc) {
-            pptr_to_paddr((void *)pptr), 0, 0, size_bits, device_memory
+            pptr_to_paddr((void *)pptr), size_bits, device_memory, {0}
         };
         ut_cap = cap_untyped_cap_new(MAX_FREE_INDEX(size_bits),
                                      device_memory, size_bits, pptr);
@@ -468,6 +619,40 @@ BOOT_CODE bool_t create_untypeds_for_region(
             }
         }
         reg.start += BIT(size_bits);
+    }
+    return true;
+}
+
+BOOT_CODE bool_t create_device_untypeds(cap_t root_cnode_cap, seL4_SlotPos slot_pos_before)
+{
+    paddr_t start = 0;
+    for (word_t i = 0; i < ndks_boot.resv_count; i++) {
+        if (start < ndks_boot.reserved[i].start) {
+            region_t reg = paddr_to_pptr_reg((p_region_t) {
+                start, ndks_boot.reserved[i].start
+            });
+            if (!create_untypeds_for_region(root_cnode_cap, true, reg, slot_pos_before)) {
+                return false;
+            }
+        }
+
+        start = ndks_boot.reserved[i].end;
+    }
+
+    if (start < CONFIG_PADDR_USER_DEVICE_TOP) {
+        region_t reg = paddr_to_pptr_reg((p_region_t) {
+            start, CONFIG_PADDR_USER_DEVICE_TOP
+        });
+        /*
+         * The auto-generated bitfield code will get upset if the
+         * end pptr is larger than the maximum pointer size for this architecture.
+         */
+        if (reg.end > PPTR_TOP) {
+            reg.end = PPTR_TOP;
+        }
+        if (!create_untypeds_for_region(root_cnode_cap, true, reg, slot_pos_before)) {
+            return false;
+        }
     }
     return true;
 }
@@ -562,6 +747,7 @@ BOOT_CODE void init_freemem(word_t n_available, const p_region_t *available,
             a++;
         } else if (reserved[r].end <= avail_reg[a].start) {
             /* the reserved region is below the available region - skip it*/
+            reserve_region(pptr_to_paddr_reg(reserved[r]));
             r++;
         } else if (reserved[r].start >= avail_reg[a].end) {
             /* the reserved region is above the available region - take the whole thing */
@@ -573,6 +759,7 @@ BOOT_CODE void init_freemem(word_t n_available, const p_region_t *available,
                 /* the region overlaps with the start of the available region.
                  * trim start of the available region */
                 avail_reg[a].start = MIN(avail_reg[a].end, reserved[r].end);
+                reserve_region(pptr_to_paddr_reg(reserved[r]));
                 r++;
             } else {
                 assert(reserved[r].start < avail_reg[a].end);
@@ -583,11 +770,18 @@ BOOT_CODE void init_freemem(word_t n_available, const p_region_t *available,
                 insert_region(m);
                 if (avail_reg[a].end > reserved[r].end) {
                     avail_reg[a].start = reserved[r].end;
+                    reserve_region(pptr_to_paddr_reg(reserved[r]));
                     r++;
                 } else {
                     a++;
                 }
             }
+        }
+    }
+
+    for (; r < n_reserved; r++) {
+        if (reserved[r].start < reserved[r].end) {
+            reserve_region(pptr_to_paddr_reg(reserved[r]));
         }
     }
 

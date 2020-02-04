@@ -14,8 +14,17 @@ cmake_minimum_required(VERSION 3.7.2)
 
 set(configure_string "${config_configure_string}")
 
-# Set kernel branch
-config_set(KernelIsMaster KERNEL_MASTER ON)
+config_option(
+    KernelIsMCS KERNEL_MCS "Use the MCS kernel configuration, which is not verified."
+    DEFAULT OFF
+)
+
+# Error for unsupported MCS platforms
+if(KernelIsMCS AND (NOT KernelPlatformSupportsMCS))
+    message(
+        FATAL_ERROR "KernelIsMCS selected, but platform: ${KernelPlatform} does not support it."
+    )
+endif()
 
 # Proof based configuration variables
 set(CSPEC_DIR "." CACHE PATH "")
@@ -50,21 +59,34 @@ if(DEFINED CONFIGURE_MAX_IRQ)
     # calculate the irq cnode size based on MAX_IRQ
     if("${KernelArch}" STREQUAL "riscv")
         set(MAX_IRQ "${CONFIGURE_PLIC_MAX_NUM_INT}")
-        math(EXPR MAX_IRQ "${MAX_IRQ} + 2")
+        math(EXPR MAX_NUM_IRQ "${MAX_IRQ} + 2")
     else()
-        set(MAX_IRQ "${CONFIGURE_MAX_IRQ}")
+        if(
+            DEFINED KernelMaxNumNodes
+            AND CONFIGURE_NUM_PPI GREATER "0"
+            AND "${KernelArch}" STREQUAL "arm"
+        )
+            math(
+                EXPR MAX_NUM_IRQ
+                "(${KernelMaxNumNodes}-1)*${CONFIGURE_NUM_PPI} + ${CONFIGURE_MAX_IRQ}"
+            )
+        else()
+            set(MAX_NUM_IRQ "${CONFIGURE_MAX_IRQ}")
+        endif()
     endif()
     set(BITS "0")
-    set(MAX "${MAX_IRQ}")
-    while(MAX GREATER "0")
+    while(MAX_NUM_IRQ GREATER "0")
         math(EXPR BITS "${BITS} + 1")
-        math(EXPR MAX "${MAX} >> 1")
+        math(EXPR MAX_NUM_IRQ "${MAX_NUM_IRQ} >> 1")
     endwhile()
     math(EXPR SLOTS "1 << ${BITS}")
     if("${SLOTS}" LESS "${MAX_IRQ}")
         math(EXPR BITS "${BITS} + 1")
     endif()
     set(CONFIGURE_IRQ_SLOT_BITS "${BITS}" CACHE INTERNAL "")
+    if(NOT DEFINED ${CONFIGURE_TIMER_PRECISION})
+        set(CONFIGURE_TIMER_PRECISION "0")
+    endif()
     configure_file(
         src/arch/${KernelArch}/platform_gen.h.in
         ${CMAKE_CURRENT_BINARY_DIR}/gen_headers/plat/platform_gen.h @ONLY
@@ -76,12 +98,8 @@ endif()
 set(KernelHaveFPU OFF)
 set(KernelSetTLSBaseSelf OFF)
 
-include(src/arch/arm/config.cmake)
-include(src/arch/riscv/config.cmake)
-include(src/arch/x86/config.cmake)
-
-include(include/32/mode/config.cmake)
-include(include/64/mode/config.cmake)
+include(src/arch/${KernelArch}/config.cmake)
+include(include/${KernelWordSize}/mode/config.cmake)
 include(src/config.cmake)
 
 if(DEFINED KernelDTSList AND (NOT "${KernelDTSList}" STREQUAL ""))
@@ -107,6 +125,7 @@ if(DEFINED KernelDTSList AND (NOT "${KernelDTSList}" STREQUAL ""))
     if("${STAT_TOOL}" STREQUAL "STAT_TOOL-NOTFOUND")
         message(FATAL_ERROR "Cannot find 'stat' program.")
     endif()
+    mark_as_advanced(DTC_TOOL STAT_TOOL)
     # Generate final DTS based on Linux DTS + seL4 overlay[s]
     foreach(entry ${KernelDTSList})
         get_absolute_source_or_binary(dts_tmp ${entry})
@@ -150,9 +169,11 @@ if(DEFINED KernelDTSList AND (NOT "${KernelDTSList}" STREQUAL ""))
         file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/gen_headers/plat/machine/")
         execute_process(
             COMMAND
-                ${PYTHON} "${HARDWARE_GEN_PATH}" --dtb "${KernelDTBPath}" --compatibility-strings
-                "${compatibility_outfile}" --output "${device_dest}" --config "${config_file}"
-                --schema "${config_schema}" --yaml "${platform_yaml}" --arch "${KernelArch}"
+                ${PYTHON3} "${HARDWARE_GEN_PATH}" --dtb "${KernelDTBPath}" --compat-strings
+                --compat-strings-out "${compatibility_outfile}" --c-header --header-out
+                "${device_dest}" --hardware-config "${config_file}" --hardware-schema
+                "${config_schema}" --yaml --yaml-out "${platform_yaml}" --arch "${KernelArch}"
+                --addrspace-max "${KernelPaddrUserTop}"
             INPUT_FILE /dev/stdin
             OUTPUT_FILE /dev/stdout
             ERROR_FILE /dev/stderr
@@ -177,6 +198,7 @@ endif()
 
 # Enshrine common variables in the config
 config_set(KernelHaveFPU HAVE_FPU "${KernelHaveFPU}")
+config_set(KernelPaddrUserTop PADDR_USER_DEVICE_TOP "${KernelPaddrUserTop}")
 
 # System parameters
 config_string(
@@ -187,11 +209,24 @@ config_string(
     UNQUOTE
 )
 
-config_string(KernelTimerTickMS TIMER_TICK_MS "Timer tick period in milliseconds" DEFAULT 2 UNQUOTE)
+config_string(
+    KernelTimerTickMS TIMER_TICK_MS "Timer tick period in milliseconds"
+    DEFAULT 2
+    UNQUOTE
+    DEPENDS "NOT KernelIsMCS" UNDEF_DISABLED
+)
 config_string(
     KernelTimeSlice TIME_SLICE "Number of timer ticks until a thread is preempted."
     DEFAULT 5
     UNQUOTE
+    DEPENDS "NOT KernelIsMCS" UNDEF_DISABLED
+)
+config_string(
+    KernelBootThreadTimeSlice BOOT_THREAD_TIME_SLICE
+    "Number of milliseconds until the boot thread is preempted."
+    DEFAULT 5
+    UNQUOTE
+    DEPENDS "KernelIsMCS" UNDEF_DISABLED
 )
 config_string(
     KernelRetypeFanOutLimit RETYPE_FAN_OUT_LIMIT
@@ -233,6 +268,9 @@ find_file(
     DOC "A C file providing the symbols ksDomSchedule and ksDomeScheudleLength \
         to be linked with the kernel as a scheduling configuration."
 )
+if(SEL4_CONFIG_DEFAULT_ADVANCED)
+    mark_as_advanced(KernelDomainSchedule)
+endif()
 
 config_string(
     KernelNumPriorities NUM_PRIORITIES "The number of priority levels per domain. Valid range 1-256"
@@ -243,7 +281,7 @@ config_string(
 config_string(
     KernelMaxNumNodes MAX_NUM_NODES "Max number of CPU cores to boot"
     DEFAULT 1
-    DEPENDS "${KernelNumDomains} EQUAL 1;NOT KernelArchRiscV"
+    DEPENDS "${KernelNumDomains} EQUAL 1"
     UNQUOTE
 )
 
@@ -289,7 +327,7 @@ config_option(
     allows userspace processes to set breakpoints, watchpoints and to \
     single-step through thread execution."
     DEFAULT OFF
-    DEPENDS "NOT KernelVerificationBuild"
+    DEPENDS "NOT KernelVerificationBuild;NOT KernelHardwareDebugAPIUnsupported"
 )
 config_option(
     KernelPrinting PRINTING
@@ -371,11 +409,11 @@ config_choice(
     KernelOptimisation
     KERNEL_OPT_LEVEL
     "Select the kernel optimisation level"
-    "-O2;KerenlOptimisationO2;KERNEL_OPT_LEVEL_O2"
-    "-Os;KerenlOptimisationOS;KERNEL_OPT_LEVEL_OS"
-    "-O0;KerenlOptimisationO0;KERNEL_OPT_LEVEL_O0"
-    "-O1;KerenlOptimisationO1;KERNEL_OPT_LEVEL_O1"
-    "-O3;KerenlOptimisationO3;KERNEL_OPT_LEVEL_O3"
+    "-O2;KernelOptimisationO2;KERNEL_OPT_LEVEL_O2"
+    "-Os;KernelOptimisationOS;KERNEL_OPT_LEVEL_OS"
+    "-O0;KernelOptimisationO0;KERNEL_OPT_LEVEL_O0"
+    "-O1;KernelOptimisationO1;KERNEL_OPT_LEVEL_O1"
+    "-O3;KernelOptimisationO3;KERNEL_OPT_LEVEL_O3"
 )
 
 config_option(
@@ -406,5 +444,17 @@ config_option(
 # Builds the kernel with support for an invocation to set the TLS_BASE
 # of the currently running thread without a capability.
 config_set(KernelSetTLSBaseSelf SET_TLS_BASE_SELF ${KernelSetTLSBaseSelf})
+
+config_string(
+    KernelWcetScale KERNEL_WCET_SCALE
+    "Multiplier to scale kernel WCET estimate by: the kernel WCET estimate  \
+     is used to ensure a thread has enough budget to get in and out of the  \
+     kernel. When running in a simulator the WCET estimate, which is tuned  \
+     for hardware, may not be sufficient. This option provides a hacky knob \
+     that can be fiddled with when running inside a simulator."
+    DEFAULT 1
+    UNQUOTE
+    DEPENDS "KernelIsMCS" UNDEF_DISABLED
+)
 
 add_config_library(kernel "${configure_string}")

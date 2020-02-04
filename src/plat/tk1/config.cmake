@@ -20,9 +20,7 @@ if(KernelPlatformTK1)
     elseif("${KernelSel4Arch}" STREQUAL arm_hyp)
         declare_seL4_arch(arm_hyp)
     else()
-        message(STATUS "Selected platform tk1 supports multiple architectures but none were given")
-        message(STATUS "  Defaulting to aarch32")
-        declare_seL4_arch(aarch32)
+        fallback_declare_seL4_arch_default(aarch32)
     endif()
     set(KernelArmCortexA15 ON)
     set(KernelArchArmV7a ON)
@@ -35,7 +33,11 @@ if(KernelPlatformTK1)
         TIMER_FREQUENCY 12000000llu
         MAX_IRQ 191
         INTERRUPT_CONTROLLER arch/machine/gic_v2.h
+        NUM_PPI 32
         TIMER drivers/timer/arm_generic.h SMMU plat/machine/smmu.h
+        CLK_MAGIC 2863311531llu
+        CLK_SHIFT 35u
+        KERNEL_WCET 100u
     )
 endif()
 

@@ -25,6 +25,17 @@
 #define GIC_DEADLINE_MS 2
 #define GIC_REG_WIDTH   32
 
+#ifdef CONFIG_ARCH_AARCH64
+#define ICC_SGI1R_EL1 "S3_0_C12_C11_5"
+#else
+#define ICC_SGI1R_EL1 "p15, 0, %Q0, %R0, c12"
+#endif
+
+#define ICC_SGI1R_INTID_SHIFT          (24)
+#define ICC_SGI1R_AFF1_SHIFT           (16)
+#define ICC_SGI1R_IRM_BIT              (40)
+#define ICC_SGI1R_CPUTARGETLIST_MASK   0xffff
+
 volatile struct gic_dist_map *const gic_dist = (volatile struct gic_dist_map *)(GICD_PPTR);
 volatile void *const gicr_base = (volatile uint8_t *)(GICR_PPTR);
 
@@ -32,20 +43,28 @@ uint32_t active_irq[CONFIG_MAX_NUM_NODES] = {IRQ_NONE};
 volatile struct gic_rdist_map *gic_rdist_map[CONFIG_MAX_NUM_NODES] = { 0 };
 volatile struct gic_rdist_sgi_ppi_map *gic_rdist_sgi_ppi_map[CONFIG_MAX_NUM_NODES] = { 0 };
 
+#ifdef CONFIG_ARCH_AARCH64
 #define MPIDR_AFF0(x) (x & 0xff)
 #define MPIDR_AFF1(x) ((x >> 8) & 0xff)
 #define MPIDR_AFF2(x) ((x >> 16) & 0xff)
 #define MPIDR_AFF3(x) ((x >> 32) & 0xff)
+#else
+#define MPIDR_AFF0(x) (x & 0xff)
+#define MPIDR_AFF1(x) ((x >> 8) & 0xff)
+#define MPIDR_AFF2(x) ((x >> 16) & 0xff)
+#define MPIDR_AFF3(x) (0)
+#endif
 #define MPIDR_MT(x)   (x & BIT(24))
+#define MPIDR_AFF_MASK(x) (x & 0xff00ffffff)
 
-static uint64_t mpidr_map[CONFIG_MAX_NUM_NODES];
+static word_t mpidr_map[CONFIG_MAX_NUM_NODES];
 
-static inline uint64_t get_mpidr(word_t core_id)
+static inline word_t get_mpidr(word_t core_id)
 {
     return mpidr_map[core_id];
 }
 
-static inline uint64_t get_current_mpidr(void)
+static inline word_t get_current_mpidr(void)
 {
     word_t core_id = CURRENT_CPU_INDEX();
     return get_mpidr(core_id);
@@ -53,9 +72,9 @@ static inline uint64_t get_current_mpidr(void)
 
 static inline uint64_t mpidr_to_gic_affinity(void)
 {
-    uint64_t mpidr = get_current_mpidr();
+    word_t mpidr = get_current_mpidr();
     uint64_t affinity = 0;
-    affinity = MPIDR_AFF3(mpidr) << 32 | MPIDR_AFF2(mpidr) << 16 |
+    affinity = (uint64_t)MPIDR_AFF3(mpidr) << 32 | MPIDR_AFF2(mpidr) << 16 |
                MPIDR_AFF1(mpidr) << 8  | MPIDR_AFF0(mpidr);
     return affinity;
 }
@@ -136,18 +155,18 @@ BOOT_CODE static void dist_init(void)
     nr_lines = GIC_REG_WIDTH * ((type & GICD_TYPE_LINESNR) + 1);
 
     /* Assume level-triggered */
-    for (i = NR_GIC_LOCAL_IRQS; i < nr_lines; i += 16) {
+    for (i = SPI_START; i < nr_lines; i += 16) {
         gic_dist->icfgrn[(i / 16)] = 0;
     }
 
     /* Default priority for global interrupts */
     priority = (GIC_PRI_IRQ << 24 | GIC_PRI_IRQ << 16 | GIC_PRI_IRQ << 8 |
                 GIC_PRI_IRQ);
-    for (i = NR_GIC_LOCAL_IRQS; i < nr_lines; i += 4) {
+    for (i = SPI_START; i < nr_lines; i += 4) {
         gic_dist->ipriorityrn[(i / 4)] = priority;
     }
     /* Disable and clear all global interrupts */
-    for (i = NR_GIC_LOCAL_IRQS; i < nr_lines; i += 32) {
+    for (i = SPI_START; i < nr_lines; i += 32) {
         gic_dist->icenablern[(i / 32)] = IRQ_SET_ALL;
         gic_dist->icpendrn[(i / 32)] = IRQ_SET_ALL;
     }
@@ -158,16 +177,16 @@ BOOT_CODE static void dist_init(void)
 
     /* Route all global IRQs to this CPU */
     affinity = mpidr_to_gic_affinity();
-    for (i = NR_GIC_LOCAL_IRQS; i < nr_lines; i++) {
+    for (i = SPI_START; i < nr_lines; i++) {
         gic_dist->iroutern[i] = affinity;
     }
 }
 
 BOOT_CODE static void gicr_locate_interface(void)
 {
-    uint64_t offset;
+    word_t offset;
     int core_id = SMP_TERNARY(getCurrentCPUIndex(), 0);
-    uint64_t mpidr = get_current_mpidr();
+    word_t mpidr = get_current_mpidr();
     uint32_t val;
 
     /*
@@ -231,7 +250,7 @@ BOOT_CODE static void gicr_init(void)
     /* Set priority on PPI and SGI interrupts */
     priority = (GIC_PRI_IRQ << 24 | GIC_PRI_IRQ << 16 | GIC_PRI_IRQ << 8 |
                 GIC_PRI_IRQ);
-    for (i = 0; i < NR_GIC_LOCAL_IRQS; i += 4) {
+    for (i = 0; i < SPI_START; i += 4) {
         gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->ipriorityrn[i / 4] = priority;
     }
 
@@ -279,14 +298,16 @@ void setIRQTrigger(irq_t irq, bool_t trigger)
     /* GICv3 has read-only GICR_ICFG0 for SGI with
      * default value 0xaaaaaaaa, and read-write GICR_ICFG1
      * for PPI with default 0x00000000.*/
-    if (is_sgi(irq)) {
+    irq_t hw_irq = IDX_TO_IRQ(irq);
+    word_t core = IDX_TO_CORE(irq);
+    if (HW_IRQ_IS_SGI(hw_irq)) {
         return;
     }
-    int word = irq >> 4;
-    int bit = ((irq & 0xf) * 2);
+    int word = hw_irq >> 4;
+    int bit = ((hw_irq & 0xf) * 2);
     uint32_t icfgr = 0;
-    if (is_ppi(irq)) {
-        icfgr = gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->icfgr1;
+    if (HW_IRQ_IS_PPI(hw_irq)) {
+        icfgr = gic_rdist_sgi_ppi_map[core]->icfgr1;
     } else {
         icfgr = gic_dist->icfgrn[word];
     }
@@ -297,8 +318,8 @@ void setIRQTrigger(irq_t irq, bool_t trigger)
         icfgr &= ~(0b11 << bit);
     }
 
-    if (is_ppi(irq)) {
-        gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->icfgr1 = icfgr;
+    if (HW_IRQ_IS_PPI(hw_irq)) {
+        gic_rdist_sgi_ppi_map[core]->icfgr1 = icfgr;
     } else {
         /* Update GICD_ICFGR<n>. Note that the interrupt should
          * be disabled before changing the field, and this function
@@ -316,8 +337,8 @@ BOOT_CODE void initIRQController(void)
 
 BOOT_CODE void cpu_initLocalIRQController(void)
 {
-    uint64_t mpidr = 0;
-    SYSTEM_READ_WORD("mpidr_el1", mpidr);
+    word_t mpidr = 0;
+    SYSTEM_READ_WORD(MPIDR, mpidr);
 
     mpidr_map[CURRENT_CPU_INDEX()] = mpidr;
 
@@ -326,26 +347,36 @@ BOOT_CODE void cpu_initLocalIRQController(void)
 }
 
 #ifdef ENABLE_SMP_SUPPORT
-/*
-* 25-24: target lister filter
-* 0b00 - send the ipi to the CPU interfaces specified in the CPU target list
-* 0b01 - send the ipi to all CPU interfaces except the cpu interface.
-*        that requrested teh ipi
-* 0b10 - send the ipi only to the CPU interface that requested the IPI.
-* 0b11 - reserved
-*.
-* 23-16: CPU targets list
-* each bit of CPU target list [7:0] refers to the corresponding CPU interface.
-* 3-0:   SGIINTID
-* software generated interrupt id, from 0 to 15...
-*/
-void ipiBroadcast(irq_t irq, bool_t includeSelfCPU)
-{
-    gic_dist->sgi_control = (!includeSelfCPU << GICD_SGIR_TARGETLISTFILTER_SHIFT) | (irq << GICD_SGIR_SGIINTID_SHIFT);
-}
+#define MPIDR_MT(x)   (x & BIT(24))
 
 void ipi_send_target(irq_t irq, word_t cpuTargetList)
 {
-    gic_dist->sgi_control = (cpuTargetList << GICD_SGIR_CPUTARGETLIST_SHIFT) | (irq << GICD_SGIR_SGIINTID_SHIFT);
+    uint64_t sgi1r = ((word_t) irq) << ICC_SGI1R_INTID_SHIFT;
+    if (MPIDR_MT(mpidr_map[getCurrentCPUIndex()])) {
+        for (word_t i = 0; i < CONFIG_MAX_NUM_NODES; i++) {
+            if (cpuTargetList & BIT(i)) {
+                sgi1r = (irq << ICC_SGI1R_INTID_SHIFT) |
+                        (i << ICC_SGI1R_AFF1_SHIFT) | 1;
+
+                SYSTEM_WRITE_64(ICC_SGI1R_EL1, sgi1r);
+            }
+        }
+    } else {
+        sgi1r |= cpuTargetList;
+        SYSTEM_WRITE_64(ICC_SGI1R_EL1, sgi1r);
+    }
+    isb();
 }
+
+void setIRQTarget(irq_t irq, seL4_Word target)
+{
+    if (IRQ_IS_PPI(irq)) {
+        fail("PPI can't have designated target core\n");
+        return;
+    }
+
+    irq_t hw_irq = IDX_TO_IRQ(irq);
+    gic_dist->iroutern[hw_irq] = MPIDR_AFF_MASK(mpidr_map[target]);
+}
+
 #endif /* ENABLE_SMP_SUPPORT */

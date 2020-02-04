@@ -46,7 +46,7 @@ BOOT_DATA static region_t reserved[MAX_RESERVED];
 BOOT_CODE static void arch_init_freemem(p_region_t ui_p_reg, p_region_t dtb_p_reg, v_region_t it_v_reg,
                                         word_t extra_bi_size_bits)
 {
-    reserved[0].start = kernelBase;
+    reserved[0].start = KERNEL_ELF_BASE;
     reserved[0].end = (pptr_t)ki_end;
 
     int index = 1;
@@ -94,20 +94,20 @@ BOOT_CODE static void init_irqs(cap_t root_cnode_cap)
 {
     irq_t i;
 
-    for (i = 0; i <= maxIRQ; i++) {
-        setIRQState(IRQInactive, i);
+    for (i = 0; i <= maxIRQ ; i++) {
+        setIRQState(IRQInactive, CORE_IRQ_TO_IDX(0, i));
     }
-    setIRQState(IRQTimer, KERNEL_TIMER_IRQ);
+    setIRQState(IRQTimer, CORE_IRQ_TO_IDX(0, KERNEL_TIMER_IRQ));
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
-    setIRQState(IRQReserved, INTERRUPT_VGIC_MAINTENANCE);
+    setIRQState(IRQReserved, CORE_IRQ_TO_IDX(0, INTERRUPT_VGIC_MAINTENANCE));
 #endif
 #ifdef CONFIG_ARM_SMMU
-    setIRQState(IRQReserved, INTERRUPT_SMMU);
+    setIRQState(IRQReserved, CORE_IRQ_TO_IDX(0, INTERRUPT_SMMU));
 #endif
 
 #ifdef CONFIG_ARM_ENABLE_PMU_OVERFLOW_INTERRUPT
 #ifdef KERNEL_PMU_IRQ
-    setIRQState(IRQReserved, KERNEL_PMU_IRQ);
+    setIRQState(IRQReserved, CORE_IRQ_TO_IDX(0, KERNEL_PMU_IRQ));
 #if (defined CONFIG_PLAT_TX1 && defined ENABLE_SMP_SUPPORT)
 //SELFOUR-1252
 #error "This platform doesn't support tracking CPU utilisation on multicore"
@@ -118,9 +118,9 @@ BOOT_CODE static void init_irqs(cap_t root_cnode_cap)
 #endif /* CONFIG_ARM_ENABLE_PMU_OVERFLOW_INTERRUPT */
 
 #ifdef ENABLE_SMP_SUPPORT
-    setIRQState(IRQIPI, irq_remote_call_ipi);
-    setIRQState(IRQIPI, irq_reschedule_ipi);
-#endif /* ENABLE_SMP_SUPPORT */
+    setIRQState(IRQIPI, CORE_IRQ_TO_IDX(getCurrentCPUIndex(), irq_remote_call_ipi));
+    setIRQState(IRQIPI, CORE_IRQ_TO_IDX(getCurrentCPUIndex(), irq_reschedule_ipi));
+#endif
 
     /* provide the IRQ control cap */
     write_slot(SLOT_PTR(pptr_of_cap(root_cnode_cap), seL4_CapIRQControl), cap_irq_control_cap_new());
@@ -130,25 +130,10 @@ BOOT_CODE static bool_t create_untypeds(cap_t root_cnode_cap, region_t boot_mem_
 {
     seL4_SlotPos   slot_pos_before;
     seL4_SlotPos   slot_pos_after;
-    region_t       dev_reg;
-    word_t         i;
 
     slot_pos_before = ndks_boot.slot_pos_cur;
+    create_device_untypeds(root_cnode_cap, slot_pos_before);
     create_kernel_untypeds(root_cnode_cap, boot_mem_reuse_reg, slot_pos_before);
-    UNUSED paddr_t current_region_pos = 0;
-    for (i = 0; i < get_num_dev_p_regs(); i++) {
-        /* It is required that untyped regions are non-overlapping.
-         * We assume that hardware regions are defined in ascending order to make
-         * overlapping checks simpler
-         */
-        assert(get_dev_p_reg(i).start >= current_region_pos);
-        current_region_pos = get_dev_p_reg(i).end;
-        dev_reg = paddr_to_pptr_reg(get_dev_p_reg(i));
-        if (!create_untypeds_for_region(root_cnode_cap, true,
-                                        dev_reg, slot_pos_before)) {
-            return false;
-        }
-    }
 
     slot_pos_after = ndks_boot.slot_pos_cur;
     ndks_boot.bi_frame->untyped = (seL4_SlotRegion) {
@@ -248,14 +233,21 @@ BOOT_CODE static void init_plat(void)
 #ifdef ENABLE_SMP_SUPPORT
 BOOT_CODE static bool_t try_init_kernel_secondary_core(void)
 {
+    unsigned i;
+
     /* need to first wait until some kernel init has been done */
     while (!node_boot_lock);
 
     /* Perform cpu init */
     init_cpu();
 
+    for (i = 0; i < NUM_PPI; i++) {
+        maskInterrupt(true, CORE_IRQ_TO_IDX(getCurrentCPUIndex(), i));
+    }
+    setIRQState(IRQIPI, CORE_IRQ_TO_IDX(getCurrentCPUIndex(), irq_remote_call_ipi));
+    setIRQState(IRQIPI, CORE_IRQ_TO_IDX(getCurrentCPUIndex(), irq_reschedule_ipi));
     /* Enable per-CPU timer interrupts */
-    maskInterrupt(false, KERNEL_TIMER_IRQ);
+    setIRQState(IRQTimer, CORE_IRQ_TO_IDX(getCurrentCPUIndex(), KERNEL_TIMER_IRQ));
 
     NODE_LOCK_SYS;
 
@@ -349,7 +341,7 @@ static BOOT_CODE bool_t try_init_kernel(
 
     /* The region of the initial thread is the user image + ipcbuf and boot info */
     it_v_reg.start = ui_v_reg.start;
-    it_v_reg.end = extra_bi_frame_vptr + extra_bi_size;
+    it_v_reg.end = extra_bi_frame_vptr + BIT(extra_bi_size_bits);
 
     if (it_v_reg.end > kernelBase) {
         printf("Userland image virtual end address too high\n");
@@ -449,6 +441,10 @@ static BOOT_CODE bool_t try_init_kernel(
         ndks_boot.bi_frame->extraBIPages = extra_bi_ret.region;
     }
 
+#ifdef CONFIG_KERNEL_MCS
+    init_sched_control(root_cnode_cap, CONFIG_MAX_NUM_NODES);
+#endif
+
     /* create the initial thread's IPC buffer */
     ipcbuf_cap = create_ipcbuf_frame_cap(root_cnode_cap, it_pd_cap, ipcbuf_vptr);
     if (cap_get_capType(ipcbuf_cap) == cap_null_cap) {
@@ -475,6 +471,10 @@ static BOOT_CODE bool_t try_init_kernel(
         return false;
     }
     write_it_asid_pool(it_ap_cap, it_pd_cap);
+
+#ifdef CONFIG_KERNEL_MCS
+    NODE_STATE(ksCurTime) = getCurrentTime();
+#endif
 
     /* create the idle thread */
     if (!create_idle_thread()) {
@@ -507,7 +507,7 @@ static BOOT_CODE bool_t try_init_kernel(
     if (!create_untypeds(
             root_cnode_cap,
     (region_t) {
-    kernelBase, (pptr_t)ki_boot_end
+    KERNEL_ELF_BASE, (pptr_t)ki_boot_end
     } /* reusable boot code/data */
         )) {
         return false;
@@ -585,6 +585,10 @@ BOOT_CODE VISIBLE void init_kernel(
         fail("Kernel init failed for some reason :(");
     }
 
+#ifdef CONFIG_KERNEL_MCS
+    NODE_STATE(ksCurTime) = getCurrentTime();
+    NODE_STATE(ksConsumed) = 0;
+#endif
     schedule();
     activateThread();
 }

@@ -32,13 +32,12 @@
 #include <arch/object/iospace.h>
 #include <arch/object/vcpu.h>
 #include <arch/machine/tlb.h>
-
-/* PGD slot reserved for storing the PGD's allocated hardware VMID.
+/* VSpace root slot is reserved for storing the VSpace root's allocated hardware VMID.
  * This is only necessary when running EL2 and when we only have
  * 8-bit VMID. Note that this assumes that the IPA size for S2
  * translation does not use full 48-bit.
  */
-#define PGD_VMID_SLOT   511
+#define VTABLE_VMID_SLOT   MASK(seL4_VSpaceIndexBits)
 #define RESERVED 3
 
 /*
@@ -273,7 +272,7 @@ BOOT_CODE void map_kernel_window(void)
 
     /* map the kernel window using large pages */
     vaddr = kernelBase;
-    for (paddr = physBase; paddr < PADDR_TOP; paddr += BIT(seL4_LargePageBits)) {
+    for (paddr = PADDR_BASE; paddr < PADDR_TOP; paddr += BIT(seL4_LargePageBits)) {
         armKSGlobalKernelPDs[GET_PUD_INDEX(vaddr)][GET_PD_INDEX(vaddr)] = pde_pde_large_new(
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
                                                                               0, // XN
@@ -310,7 +309,7 @@ BOOT_CODE void map_kernel_window(void)
  */
 static BOOT_CODE void map_it_frame_cap(cap_t vspace_cap, cap_t frame_cap, bool_t executable)
 {
-    pgde_t *pgd = PGD_PTR(pptr_of_cap(vspace_cap));
+    vspace_root_t *vspaceRoot = VSPACE_PTR(pptr_of_cap(vspace_cap));
     pude_t *pud;
     pde_t *pd;
     pte_t *pt;
@@ -320,10 +319,14 @@ static BOOT_CODE void map_it_frame_cap(cap_t vspace_cap, cap_t frame_cap, bool_t
 
     assert(cap_frame_cap_get_capFMappedASID(frame_cap) != 0);
 
-    pgd += GET_PGD_INDEX(vptr);
-    assert(pgde_pgde_pud_ptr_get_present(pgd));
-    pud = paddr_to_pptr(pgde_pgde_pud_ptr_get_pud_base_address(pgd));
-    pud += GET_PUD_INDEX(vptr);
+#ifdef AARCH64_VSPACE_S2_START_L1
+    pud = vspaceRoot;
+#else
+    vspaceRoot += GET_PGD_INDEX(vptr);
+    assert(pgde_pgde_pud_ptr_get_present(vspaceRoot));
+    pud = paddr_to_pptr(pgde_pgde_pud_ptr_get_pud_base_address(vspaceRoot));
+#endif
+    pud += GET_UPUD_INDEX(vptr);
     assert(pude_pude_pd_ptr_get_present(pud));
     pd = paddr_to_pptr(pude_pude_pd_ptr_get_pd_base_address(pud));
     pd += GET_PD_INDEX(vptr);
@@ -370,7 +373,7 @@ static BOOT_CODE cap_t create_it_frame_cap(pptr_t pptr, vptr_t vptr, asid_t asid
 
 static BOOT_CODE void map_it_pt_cap(cap_t vspace_cap, cap_t pt_cap)
 {
-    pgde_t *pgd = PGD_PTR(pptr_of_cap(vspace_cap));
+    vspace_root_t *vspaceRoot = VSPACE_PTR(pptr_of_cap(vspace_cap));
     pude_t *pud;
     pde_t *pd;
     pte_t *pt = PT_PTR(cap_page_table_cap_get_capPTBasePtr(pt_cap));
@@ -378,10 +381,14 @@ static BOOT_CODE void map_it_pt_cap(cap_t vspace_cap, cap_t pt_cap)
 
     assert(cap_page_table_cap_get_capPTIsMapped(pt_cap));
 
-    pgd += GET_PGD_INDEX(vptr);
-    assert(pgde_pgde_pud_ptr_get_present(pgd));
-    pud = paddr_to_pptr(pgde_pgde_pud_ptr_get_pud_base_address(pgd));
-    pud += GET_PUD_INDEX(vptr);
+#ifdef AARCH64_VSPACE_S2_START_L1
+    pud = vspaceRoot;
+#else
+    vspaceRoot += GET_PGD_INDEX(vptr);
+    assert(pgde_pgde_pud_ptr_get_present(vspaceRoot));
+    pud = paddr_to_pptr(pgde_pgde_pud_ptr_get_pud_base_address(vspaceRoot));
+#endif
+    pud += GET_UPUD_INDEX(vptr);
     assert(pude_pude_pd_ptr_get_present(pud));
     pd = paddr_to_pptr(pude_pude_pd_ptr_get_pd_base_address(pud));
     *(pd + GET_PD_INDEX(vptr)) = pde_pde_small_new(
@@ -404,19 +411,23 @@ static BOOT_CODE cap_t create_it_pt_cap(cap_t vspace_cap, pptr_t pptr, vptr_t vp
 
 static BOOT_CODE void map_it_pd_cap(cap_t vspace_cap, cap_t pd_cap)
 {
-    pgde_t *pgd = PGD_PTR(pptr_of_cap(vspace_cap));
+    vspace_root_t *vspaceRoot = VSPACE_PTR(pptr_of_cap(vspace_cap));
     pude_t *pud;
     pde_t *pd = PD_PTR(cap_page_directory_cap_get_capPDBasePtr(pd_cap));
     vptr_t vptr = cap_page_directory_cap_get_capPDMappedAddress(pd_cap);
 
     assert(cap_page_directory_cap_get_capPDIsMapped(pd_cap));
 
-    pgd += GET_PGD_INDEX(vptr);
-    assert(pgde_pgde_pud_ptr_get_present(pgd));
-    pud = paddr_to_pptr(pgde_pgde_pud_ptr_get_pud_base_address(pgd));
-    *(pud + GET_PUD_INDEX(vptr)) = pude_pude_pd_new(
-                                       pptr_to_paddr(pd)
-                                   );
+#ifdef AARCH64_VSPACE_S2_START_L1
+    pud = vspaceRoot;
+#else
+    vspaceRoot += GET_PGD_INDEX(vptr);
+    assert(pgde_pgde_pud_ptr_get_present(vspaceRoot));
+    pud = paddr_to_pptr(pgde_pgde_pud_ptr_get_pud_base_address(vspaceRoot));
+#endif
+    *(pud + GET_UPUD_INDEX(vptr)) = pude_pude_pd_new(
+                                        pptr_to_paddr(pd)
+                                    );
 }
 
 static BOOT_CODE cap_t create_it_pd_cap(cap_t vspace_cap, pptr_t pptr, vptr_t vptr, asid_t asid)
@@ -432,6 +443,7 @@ static BOOT_CODE cap_t create_it_pd_cap(cap_t vspace_cap, pptr_t pptr, vptr_t vp
     return cap;
 }
 
+#ifndef AARCH64_VSPACE_S2_START_L1
 static BOOT_CODE void map_it_pud_cap(cap_t vspace_cap, cap_t pud_cap)
 {
     pgde_t *pgd = PGD_PTR(pptr_of_cap(vspace_cap));
@@ -456,12 +468,15 @@ static BOOT_CODE cap_t create_it_pud_cap(cap_t vspace_cap, pptr_t pptr, vptr_t v
     map_it_pud_cap(vspace_cap, cap);
     return cap;
 }
-
+#endif /* AARCH64_VSPACE_S2_START_L1 */
 BOOT_CODE word_t arch_get_n_paging(v_region_t it_v_reg)
 {
-    return get_n_paging(it_v_reg, PGD_INDEX_OFFSET) +
-           get_n_paging(it_v_reg, PUD_INDEX_OFFSET) +
-           get_n_paging(it_v_reg, PD_INDEX_OFFSET);
+    return
+#ifndef AARCH64_VSPACE_S2_START_L1
+        get_n_paging(it_v_reg, PGD_INDEX_OFFSET) +
+#endif
+        get_n_paging(it_v_reg, PUD_INDEX_OFFSET) +
+        get_n_paging(it_v_reg, PD_INDEX_OFFSET);
 }
 
 BOOT_CODE cap_t create_it_address_space(cap_t root_cnode_cap, v_region_t it_v_reg)
@@ -472,7 +487,7 @@ BOOT_CODE cap_t create_it_address_space(cap_t root_cnode_cap, v_region_t it_v_re
     seL4_SlotPos slot_pos_after;
 
     /* create the PGD */
-    vspace_cap = cap_page_global_directory_cap_new(
+    vspace_cap = cap_vtable_cap_new(
                      IT_ASID,        /* capPGDMappedASID */
                      rootserver.vspace, /* capPGDBasePtr   */
                      1               /* capPGDIsMapped   */
@@ -480,6 +495,7 @@ BOOT_CODE cap_t create_it_address_space(cap_t root_cnode_cap, v_region_t it_v_re
     slot_pos_before = ndks_boot.slot_pos_cur;
     write_slot(SLOT_PTR(pptr_of_cap(root_cnode_cap), seL4_CapInitThreadVSpace), vspace_cap);
 
+#ifndef AARCH64_VSPACE_S2_START_L1
     /* Create any PUDs needed for the user land image */
     for (vptr = ROUND_DOWN(it_v_reg.start, PGD_INDEX_OFFSET);
          vptr < it_v_reg.end;
@@ -488,7 +504,7 @@ BOOT_CODE cap_t create_it_address_space(cap_t root_cnode_cap, v_region_t it_v_re
             return cap_null_cap_new();
         }
     }
-
+#endif
     /* Create any PDs needed for the user land image */
     for (vptr = ROUND_DOWN(it_v_reg.start, PUD_INDEX_OFFSET);
          vptr < it_v_reg.end;
@@ -533,10 +549,10 @@ BOOT_CODE void activate_kernel_vspace(void)
     setCurrentKernelVSpaceRoot(ttbr_new(0, pptr_to_paddr(armKSGlobalKernelPGD)));
 
     /* Prevent elf-loader address translation to fill up TLB */
-    setCurrentUserVSpaceRoot(ttbr_new(0, pptr_to_paddr(armKSGlobalUserPGD)));
+    setCurrentUserVSpaceRoot(ttbr_new(0, pptr_to_paddr(armKSGlobalUserVSpace)));
 
     invalidateLocalTLB();
-    lockTLBEntry(kernelBase);
+    lockTLBEntry(KERNEL_ELF_BASE);
 }
 
 BOOT_CODE void write_it_asid_pool(cap_t it_ap_cap, cap_t it_vspace_cap)
@@ -643,10 +659,16 @@ static lookupPGDSlot_ret_t lookupPGDSlot(vspace_root_t *vspace, vptr_t vptr)
 
 static lookupPUDSlot_ret_t lookupPUDSlot(vspace_root_t *vspace, vptr_t vptr)
 {
-    lookupPGDSlot_ret_t pgdSlot;
     lookupPUDSlot_ret_t ret;
 
-    pgdSlot = lookupPGDSlot(vspace, vptr);
+#ifdef AARCH64_VSPACE_S2_START_L1
+    pude_t *pud = PUDE_PTR(vspace);
+    word_t pudIndex = GET_UPUD_INDEX(vptr);
+    ret.status = EXCEPTION_NONE;
+    ret.pudSlot = pud + pudIndex;
+    return ret;
+#else
+    lookupPGDSlot_ret_t pgdSlot = lookupPGDSlot(vspace, vptr);
 
     if (!pgde_pgde_pud_ptr_get_present(pgdSlot.pgdSlot)) {
         current_lookup_fault = lookup_fault_missing_capability_new(PGD_INDEX_OFFSET);
@@ -657,7 +679,7 @@ static lookupPUDSlot_ret_t lookupPUDSlot(vspace_root_t *vspace, vptr_t vptr)
     } else {
         pude_t *pud;
         pude_t *pudSlot;
-        word_t pudIndex = GET_PUD_INDEX(vptr);
+        word_t pudIndex = GET_UPUD_INDEX(vptr);
         pud = paddr_to_pptr(pgde_pgde_pud_ptr_get_pud_base_address(pgdSlot.pgdSlot));
         pudSlot = pud + pudIndex;
 
@@ -665,6 +687,7 @@ static lookupPUDSlot_ret_t lookupPUDSlot(vspace_root_t *vspace, vptr_t vptr)
         ret.pudSlot = pudSlot;
         return ret;
     }
+#endif
 }
 
 static lookupPDSlot_ret_t lookupPDSlot(vspace_root_t *vspace, vptr_t vptr)
@@ -952,13 +975,13 @@ exception_t handleVMFault(tcb_t *thread, vm_fault_type_t vm_faultType)
 
 bool_t CONST isVTableRoot(cap_t cap)
 {
-    return cap_get_capType(cap) == cap_page_global_directory_cap;
+    return cap_get_capType(cap) == cap_vtable_root_cap;
 }
 
 bool_t CONST isValidNativeRoot(cap_t cap)
 {
     return isVTableRoot(cap) &&
-           cap_page_global_directory_cap_get_capPGDIsMapped(cap);
+           cap_vtable_root_isMapped(cap);
 }
 
 bool_t CONST isValidVTableRoot(cap_t cap)
@@ -970,28 +993,25 @@ void setVMRoot(tcb_t *tcb)
 {
     cap_t threadRoot;
     asid_t asid;
-    pgde_t *pgd;
+    vspace_root_t *vspaceRoot;
     findVSpaceForASID_ret_t find_ret;
 
     threadRoot = TCB_PTR_CTE_PTR(tcb, tcbVTable)->cap;
 
     if (!isValidNativeRoot(threadRoot)) {
-        setCurrentUserVSpaceRoot(ttbr_new(0, pptr_to_paddr(armKSGlobalUserPGD)));
+        setCurrentUserVSpaceRoot(ttbr_new(0, pptr_to_paddr(armKSGlobalUserVSpace)));
         return;
     }
 
-    pgd = PGD_PTR(cap_page_global_directory_cap_get_capPGDBasePtr(threadRoot));
-    asid = cap_page_global_directory_cap_get_capPGDMappedASID(threadRoot);
+    vspaceRoot = VSPACE_PTR(cap_vtable_root_get_basePtr(threadRoot));
+    asid = cap_vtable_root_get_mappedASID(threadRoot);
     find_ret = findVSpaceForASID(asid);
-    if (unlikely(find_ret.status != EXCEPTION_NONE || find_ret.vspace_root != pgd)) {
-        setCurrentUserVSpaceRoot(ttbr_new(0, pptr_to_paddr(armKSGlobalUserPGD)));
+    if (unlikely(find_ret.status != EXCEPTION_NONE || find_ret.vspace_root != vspaceRoot)) {
+        setCurrentUserVSpaceRoot(ttbr_new(0, pptr_to_paddr(armKSGlobalUserVSpace)));
         return;
     }
 
-    armv_contextSwitch(pgd, asid);
-    if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
-        vcpu_switch(tcb->tcbArch.tcbVCPU);
-    }
+    armv_contextSwitch(vspaceRoot, asid);
 }
 
 static bool_t setVMRootForFlush(vspace_root_t *vspace, asid_t asid)
@@ -1000,9 +1020,9 @@ static bool_t setVMRootForFlush(vspace_root_t *vspace, asid_t asid)
 
     threadRoot = TCB_PTR_CTE_PTR(NODE_STATE(ksCurThread), tcbVTable)->cap;
 
-    if (cap_get_capType(threadRoot) == cap_page_global_directory_cap &&
-        cap_page_global_directory_cap_get_capPGDIsMapped(threadRoot) &&
-        PGD_PTR(cap_page_global_directory_cap_get_capPGDBasePtr(threadRoot)) == vspace) {
+    if (cap_get_capType(threadRoot) == cap_vtable_root_cap &&
+        cap_vtable_root_isMapped(threadRoot) &&
+        cap_vtable_root_get_basePtr(threadRoot) == vspace) {
         return false;
     }
 
@@ -1057,45 +1077,42 @@ pude_t *pageDirectoryMapped(asid_t asid, vptr_t vaddr, pde_t *pd)
 static void invalidateASID(asid_t asid)
 {
     asid_pool_t *asidPool;
-    pgde_t *pgd;
 
     asidPool = armKSASIDTable[asid >> asidLowBits];
     assert(asidPool);
 
-    pgd = asidPool->array[asid & MASK(asidLowBits)];
-    assert(pgd);
+    vspace_root_t *vtable = asidPool->array[asid & MASK(asidLowBits)];
+    assert(vtable);
 
-    pgd[PGD_VMID_SLOT] = pgde_pgde_invalid_new(0, false);
+    vtable[VTABLE_VMID_SLOT] = vtable_invalid_new(0, false);
 }
 
-static pgde_t PURE loadHWASID(asid_t asid)
+static vspace_root_t PURE loadHWASID(asid_t asid)
 {
     asid_pool_t *asidPool;
-    pgde_t *pgd;
 
     asidPool = armKSASIDTable[asid >> asidLowBits];
     assert(asidPool);
 
-    pgd = asidPool->array[asid & MASK(asidLowBits)];
-    assert(pgd);
+    vspace_root_t *vtable = asidPool->array[asid & MASK(asidLowBits)];
+    assert(vtable);
 
-    return pgd[PGD_VMID_SLOT];
+    return vtable[VTABLE_VMID_SLOT];
 }
 
 static void storeHWASID(asid_t asid, hw_asid_t hw_asid)
 {
     asid_pool_t *asidPool;
-    pgde_t *pgd;
 
     asidPool = armKSASIDTable[asid >> asidLowBits];
     assert(asidPool);
 
-    pgd = asidPool->array[asid & MASK(asidLowBits)];
-    assert(pgd);
+    vspace_root_t *vtable = asidPool->array[asid & MASK(asidLowBits)];
+    assert(vtable);
 
     /* Store HW VMID in the last entry
        Masquerade as an invalid PDGE */
-    pgd[PGD_VMID_SLOT] = pgde_pgde_invalid_new(hw_asid, true);
+    vtable[VTABLE_VMID_SLOT] = vtable_invalid_new(hw_asid, true);
 
     armKSHWASIDTable[hw_asid] = asid;
 }
@@ -1132,11 +1149,11 @@ static hw_asid_t findFreeHWASID(void)
 
 hw_asid_t getHWASID(asid_t asid)
 {
-    pgde_t stored_hw_asid;
+    vspace_root_t stored_hw_asid;
 
     stored_hw_asid = loadHWASID(asid);
-    if (pgde_pgde_invalid_get_stored_asid_valid(stored_hw_asid)) {
-        return pgde_pgde_invalid_get_stored_hw_asid(stored_hw_asid);
+    if (vtable_invalid_get_stored_asid_valid(stored_hw_asid)) {
+        return vtable_invalid_get_stored_hw_asid(stored_hw_asid);
     } else {
         hw_asid_t new_hw_asid;
 
@@ -1148,11 +1165,11 @@ hw_asid_t getHWASID(asid_t asid)
 
 static void invalidateASIDEntry(asid_t asid)
 {
-    pgde_t stored_hw_asid;
+    vspace_root_t stored_hw_asid;
 
     stored_hw_asid = loadHWASID(asid);
-    if (pgde_pgde_invalid_get_stored_asid_valid(stored_hw_asid)) {
-        armKSHWASIDTable[pgde_pgde_invalid_get_stored_hw_asid(stored_hw_asid)] =
+    if (vtable_invalid_get_stored_asid_valid(stored_hw_asid)) {
+        armKSHWASIDTable[vtable_invalid_get_stored_hw_asid(stored_hw_asid)] =
             asidInvalid;
     }
     invalidateASID(asid);
@@ -1163,13 +1180,13 @@ static void invalidateASIDEntry(asid_t asid)
 static inline void invalidateTLBByASID(asid_t asid)
 {
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
-    pgde_t stored_hw_asid;
+    vspace_root_t stored_hw_asid;
 
     stored_hw_asid = loadHWASID(asid);
-    if (!pgde_pgde_invalid_get_stored_asid_valid(stored_hw_asid)) {
+    if (!vtable_invalid_get_stored_asid_valid(stored_hw_asid)) {
         return;
     }
-    invalidateTranslationASID(pgde_pgde_invalid_get_stored_hw_asid(stored_hw_asid));
+    invalidateTranslationASID(vtable_invalid_get_stored_hw_asid(stored_hw_asid));
 #else
     invalidateTranslationASID(asid);
 #endif
@@ -1178,13 +1195,13 @@ static inline void invalidateTLBByASID(asid_t asid)
 static inline void invalidateTLBByASIDVA(asid_t asid, vptr_t vaddr)
 {
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
-    pgde_t stored_hw_asid;
+    vspace_root_t stored_hw_asid;
 
     stored_hw_asid = loadHWASID(asid);
-    if (!pgde_pgde_invalid_get_stored_asid_valid(stored_hw_asid)) {
+    if (!vtable_invalid_get_stored_asid_valid(stored_hw_asid)) {
         return;
     }
-    uint64_t hw_asid = pgde_pgde_invalid_get_stored_hw_asid(stored_hw_asid);
+    uint64_t hw_asid = vtable_invalid_get_stored_hw_asid(stored_hw_asid);
     invalidateTranslationSingle((hw_asid << 48) | vaddr >> seL4_PageBits);
 #else
     invalidateTranslationSingle((asid << 48) | vaddr >> seL4_PageBits);
@@ -1363,22 +1380,22 @@ void deleteASIDPool(asid_t asid_base, asid_pool_t *pool)
 static void doFlush(int invLabel, vptr_t start, vptr_t end, paddr_t pstart)
 {
     switch (invLabel) {
-    case ARMPageGlobalDirectoryClean_Data:
+    case ARMVSpaceClean_Data:
     case ARMPageClean_Data:
         cleanCacheRange_RAM(start, end, pstart);
         break;
 
-    case ARMPageGlobalDirectoryInvalidate_Data:
+    case ARMVSpaceInvalidate_Data:
     case ARMPageInvalidate_Data:
         invalidateCacheRange_RAM(start, end, pstart);
         break;
 
-    case ARMPageGlobalDirectoryCleanInvalidate_Data:
+    case ARMVSpaceCleanInvalidate_Data:
     case ARMPageCleanInvalidate_Data:
         cleanInvalidateCacheRange_RAM(start, end, pstart);
         break;
 
-    case ARMPageGlobalDirectoryUnify_Instruction:
+    case ARMVSpaceUnify_Instruction:
     case ARMPageUnify_Instruction:
         /* First clean data lines to point of unification... */
         cleanCacheRange_PoU(start, end, pstart);
@@ -1397,8 +1414,8 @@ static void doFlush(int invLabel, vptr_t start, vptr_t end, paddr_t pstart)
 
 /* ================= INVOCATION HANDLING STARTS HERE ================== */
 
-static exception_t performPageGlobalDirectoryFlush(int invLabel, pgde_t *pgd, asid_t asid,
-                                                   vptr_t start, vptr_t end, paddr_t pstart)
+static exception_t performVSpaceFlush(int invLabel, vspace_root_t *vspaceRoot, asid_t asid,
+                                      vptr_t start, vptr_t end, paddr_t pstart)
 {
 
     if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
@@ -1413,7 +1430,7 @@ static exception_t performPageGlobalDirectoryFlush(int invLabel, pgde_t *pgd, as
 
         /* Flush if given a non zero range */
         if (start < end) {
-            root_switched = setVMRootForFlush(pgd, asid);
+            root_switched = setVMRootForFlush(vspaceRoot, asid);
             doFlush(invLabel, start, end, pstart);
             if (root_switched) {
                 setVMRoot(NODE_STATE(ksCurThread));
@@ -1423,6 +1440,7 @@ static exception_t performPageGlobalDirectoryFlush(int invLabel, pgde_t *pgd, as
     return EXCEPTION_NONE;
 }
 
+#ifndef AARCH64_VSPACE_S2_START_L1
 static exception_t performUpperPageDirectoryInvocationMap(cap_t cap, cte_t *ctSlot, pgde_t pgde, pgde_t *pgdSlot)
 {
     ctSlot->cap = cap;
@@ -1444,6 +1462,7 @@ static exception_t performUpperPageDirectoryInvocationUnmap(cap_t cap, cte_t *ct
     cap_page_upper_directory_cap_ptr_set_capPUDIsMapped(&(ctSlot->cap), 0);
     return EXCEPTION_NONE;
 }
+#endif
 
 static exception_t performPageDirectoryInvocationMap(cap_t cap, cte_t *ctSlot, pude_t pude, pude_t *pudSlot)
 {
@@ -1554,7 +1573,7 @@ static exception_t performPageInvocationUnmap(cap_t cap, cte_t *ctSlot)
     return EXCEPTION_NONE;
 }
 
-static exception_t performPageFlush(int invLabel, pgde_t *pgd, asid_t asid,
+static exception_t performPageFlush(int invLabel, vspace_root_t *vspaceRoot, asid_t asid,
                                     vptr_t start, vptr_t end, paddr_t pstart)
 {
     if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
@@ -1573,7 +1592,7 @@ static exception_t performPageFlush(int invLabel, pgde_t *pgd, asid_t asid,
         bool_t root_switched;
 
         if (start < end) {
-            root_switched = setVMRootForFlush(pgd, asid);
+            root_switched = setVMRootForFlush(vspaceRoot, asid);
             doFlush(invLabel, start, end, pstart);
             if (root_switched) {
                 setVMRoot(NODE_STATE(ksCurThread));
@@ -1590,16 +1609,6 @@ static exception_t performPageGetAddress(pptr_t base_ptr)
     setRegister(NODE_STATE(ksCurThread), msgRegisters[0], base);
     setRegister(NODE_STATE(ksCurThread), msgInfoRegister,
                 wordFromMessageInfo(seL4_MessageInfo_new(0, 0, 0, 1)));
-
-    return EXCEPTION_NONE;
-}
-
-static exception_t performASIDPoolInvocation(asid_t asid, asid_pool_t *poolPtr, cte_t *vspaceCapSlot)
-{
-    cap_page_global_directory_cap_ptr_set_capPGDMappedASID(&vspaceCapSlot->cap, asid);
-    cap_page_global_directory_cap_ptr_set_capPGDIsMapped(&vspaceCapSlot->cap, 1);
-    poolPtr->array[asid & MASK(asidLowBits)] =
-        PGD_PTR(cap_page_global_directory_cap_get_capPGDBasePtr(vspaceCapSlot->cap));
 
     return EXCEPTION_NONE;
 }
@@ -1624,25 +1633,25 @@ static exception_t performASIDControlInvocation(void *frame, cte_t *slot,
     return EXCEPTION_NONE;
 }
 
-static exception_t decodeARMPageGlobalDirectoryInvocation(word_t invLabel, unsigned int length,
-                                                          cte_t *cte, cap_t cap, extra_caps_t extraCaps,
-                                                          word_t *buffer)
+static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, unsigned int length,
+                                                 cte_t *cte, cap_t cap, extra_caps_t extraCaps,
+                                                 word_t *buffer)
 {
     vptr_t start, end;
     paddr_t pstart;
     asid_t asid;
-    pgde_t *pgd;
+    vspace_root_t *vspaceRoot;
     lookupFrame_ret_t resolve_ret;
     findVSpaceForASID_ret_t find_ret;
 
     switch (invLabel) {
-    case ARMPageGlobalDirectoryClean_Data:
-    case ARMPageGlobalDirectoryInvalidate_Data:
-    case ARMPageGlobalDirectoryCleanInvalidate_Data:
-    case ARMPageGlobalDirectoryUnify_Instruction:
+    case ARMVSpaceClean_Data:
+    case ARMVSpaceInvalidate_Data:
+    case ARMVSpaceCleanInvalidate_Data:
+    case ARMVSpaceUnify_Instruction:
 
         if (length < 2) {
-            userError("PGD Flush: Truncated message.");
+            userError("VSpaceRoot Flush: Truncated message.");
             current_syscall_error.type = seL4_TruncatedMessage;
             return EXCEPTION_SYSCALL_ERROR;
         }
@@ -1652,7 +1661,7 @@ static exception_t decodeARMPageGlobalDirectoryInvocation(word_t invLabel, unsig
 
         /* Check sanity of arguments */
         if (end <= start) {
-            userError("PGD Flush: Invalid range.");
+            userError("VSpaceRoot Flush: Invalid range.");
             current_syscall_error.type = seL4_InvalidArgument;
             current_syscall_error.invalidArgumentNumber = 1;
             return EXCEPTION_SYSCALL_ERROR;
@@ -1660,7 +1669,7 @@ static exception_t decodeARMPageGlobalDirectoryInvocation(word_t invLabel, unsig
 
         /* Don't let applications flush kernel regions. */
         if (end > USER_TOP) {
-            userError("PGD Flush: Exceed the user addressable region.");
+            userError("VSpaceRoot Flush: Exceed the user addressable region.");
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
@@ -1672,26 +1681,26 @@ static exception_t decodeARMPageGlobalDirectoryInvocation(word_t invLabel, unsig
         }
 
         /* Make sure that the supplied pgd is ok */
-        pgd = PGDE_PTR(cap_page_global_directory_cap_get_capPGDBasePtr(cap));
-        asid = cap_page_global_directory_cap_get_capPGDMappedASID(cap);
+        vspaceRoot = cap_vtable_root_get_basePtr(cap);
+        asid = cap_vtable_root_get_mappedASID(cap);
 
         find_ret = findVSpaceForASID(asid);
         if (unlikely(find_ret.status != EXCEPTION_NONE)) {
-            userError("PGD Flush: No PGD for ASID");
+            userError("VSpaceRoot Flush: No VSpace for ASID");
             current_syscall_error.type = seL4_FailedLookup;
             current_syscall_error.failedLookupWasSource = false;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        if (unlikely(find_ret.vspace_root != pgd)) {
-            userError("PGD Flush: Invalid PGD Cap");
+        if (unlikely(find_ret.vspace_root != vspaceRoot)) {
+            userError("VSpaceRoot Flush: Invalid VSpace Cap");
             current_syscall_error.type = seL4_InvalidCapability;
             current_syscall_error.invalidCapNumber = 0;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
         /* Look up the frame containing 'start'. */
-        resolve_ret = lookupFrame(pgd, start);
+        resolve_ret = lookupFrame(vspaceRoot, start);
 
         if (!resolve_ret.valid) {
             /* Fail silently, as there can't be any stale cached data (for the
@@ -1714,7 +1723,7 @@ static exception_t decodeARMPageGlobalDirectoryInvocation(word_t invLabel, unsig
         pstart = resolve_ret.frameBase + PAGE_OFFSET(start, resolve_ret.frameSize);
 
         setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
-        return performPageGlobalDirectoryFlush(invLabel, pgd, asid, start, end - 1, pstart);
+        return performVSpaceFlush(invLabel, vspaceRoot, asid, start, end - 1, pstart);
 
     default:
         current_syscall_error.type = seL4_IllegalOperation;
@@ -1722,12 +1731,13 @@ static exception_t decodeARMPageGlobalDirectoryInvocation(word_t invLabel, unsig
     }
 }
 
+#ifndef AARCH64_VSPACE_S2_START_L1
 static exception_t decodeARMPageUpperDirectoryInvocation(word_t invLabel, unsigned int length,
                                                          cte_t *cte, cap_t cap, extra_caps_t extraCaps,
                                                          word_t *buffer)
 {
     cap_t pgdCap;
-    pgde_t *pgd;
+    vspace_root_t *pgd;
     pgde_t pgde;
     asid_t asid;
     vptr_t vaddr;
@@ -1769,8 +1779,8 @@ static exception_t decodeARMPageUpperDirectoryInvocation(word_t invLabel, unsign
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    pgd = PGDE_PTR(cap_page_global_directory_cap_get_capPGDBasePtr(pgdCap));
-    asid = cap_page_global_directory_cap_get_capPGDMappedASID(pgdCap);
+    pgd = cap_vtable_root_get_basePtr(pgdCap);
+    asid = cap_vtable_root_get_mappedASID(pgdCap);
 
     if (unlikely(vaddr > USER_TOP)) {
         current_syscall_error.type = seL4_InvalidArgument;
@@ -1808,13 +1818,14 @@ static exception_t decodeARMPageUpperDirectoryInvocation(word_t invLabel, unsign
     setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
     return performUpperPageDirectoryInvocationMap(cap, cte, pgde, pgdSlot.pgdSlot);
 }
+#endif
 
 static exception_t decodeARMPageDirectoryInvocation(word_t invLabel, unsigned int length,
                                                     cte_t *cte, cap_t cap, extra_caps_t extraCaps,
                                                     word_t *buffer)
 {
-    cap_t pgdCap;
-    pgde_t *pgd;
+    cap_t vspaceRootCap;
+    vspace_root_t *vspaceRoot;
     pude_t pude;
     asid_t asid;
     vptr_t vaddr;
@@ -1848,16 +1859,16 @@ static exception_t decodeARMPageDirectoryInvocation(word_t invLabel, unsigned in
     }
 
     vaddr = getSyscallArg(0, buffer) & (~MASK(PUD_INDEX_OFFSET));
-    pgdCap = extraCaps.excaprefs[0]->cap;
+    vspaceRootCap = extraCaps.excaprefs[0]->cap;
 
-    if (unlikely(!isValidNativeRoot(pgdCap))) {
+    if (unlikely(!isValidNativeRoot(vspaceRootCap))) {
         current_syscall_error.type = seL4_InvalidCapability;
         current_syscall_error.invalidCapNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    pgd = PGDE_PTR(cap_page_global_directory_cap_get_capPGDBasePtr(pgdCap));
-    asid = cap_page_global_directory_cap_get_capPGDMappedASID(pgdCap);
+    vspaceRoot = cap_vtable_root_get_basePtr(vspaceRootCap);
+    asid = cap_vtable_root_get_mappedASID(vspaceRootCap);
 
     if (unlikely(vaddr > USER_TOP)) {
         current_syscall_error.type = seL4_InvalidArgument;
@@ -1872,13 +1883,13 @@ static exception_t decodeARMPageDirectoryInvocation(word_t invLabel, unsigned in
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    if (unlikely(find_ret.vspace_root != pgd)) {
+    if (unlikely(find_ret.vspace_root != vspaceRoot)) {
         current_syscall_error.type = seL4_InvalidCapability;
         current_syscall_error.invalidCapNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    pudSlot = lookupPUDSlot(pgd, vaddr);
+    pudSlot = lookupPUDSlot(vspaceRoot, vaddr);
 
     if (pudSlot.status != EXCEPTION_NONE) {
         current_syscall_error.type = seL4_FailedLookup;
@@ -1906,8 +1917,8 @@ static exception_t decodeARMPageTableInvocation(word_t invLabel, unsigned int le
                                                 cte_t *cte, cap_t cap, extra_caps_t extraCaps,
                                                 word_t *buffer)
 {
-    cap_t pgdCap;
-    pgde_t *pgd;
+    cap_t vspaceRootCap;
+    vspace_root_t *vspaceRoot;
     pde_t pde;
     asid_t asid;
     vptr_t vaddr;
@@ -1941,16 +1952,16 @@ static exception_t decodeARMPageTableInvocation(word_t invLabel, unsigned int le
     }
 
     vaddr = getSyscallArg(0, buffer) & (~MASK(PD_INDEX_OFFSET));
-    pgdCap = extraCaps.excaprefs[0]->cap;
+    vspaceRootCap = extraCaps.excaprefs[0]->cap;
 
-    if (unlikely(!isValidNativeRoot(pgdCap))) {
+    if (unlikely(!isValidNativeRoot(vspaceRootCap))) {
         current_syscall_error.type = seL4_InvalidCapability;
         current_syscall_error.invalidCapNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    pgd = PGDE_PTR(cap_page_global_directory_cap_get_capPGDBasePtr(pgdCap));
-    asid = cap_page_global_directory_cap_get_capPGDMappedASID(pgdCap);
+    vspaceRoot = cap_vtable_root_get_basePtr(vspaceRootCap);
+    asid = cap_vtable_root_get_mappedASID(vspaceRootCap);
 
     if (unlikely(vaddr > USER_TOP)) {
         current_syscall_error.type = seL4_InvalidArgument;
@@ -1965,13 +1976,13 @@ static exception_t decodeARMPageTableInvocation(word_t invLabel, unsigned int le
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    if (unlikely(find_ret.vspace_root != pgd)) {
+    if (unlikely(find_ret.vspace_root != vspaceRoot)) {
         current_syscall_error.type = seL4_InvalidCapability;
         current_syscall_error.invalidCapNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    pdSlot = lookupPDSlot(pgd, vaddr);
+    pdSlot = lookupPDSlot(vspaceRoot, vaddr);
 
     if (pdSlot.status != EXCEPTION_NONE) {
         current_syscall_error.type = seL4_FailedLookup;
@@ -2003,9 +2014,9 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, unsigned int length
     case ARMPageMap: {
         vptr_t vaddr;
         paddr_t base;
-        cap_t pgdCap;
-        pgde_t *pgd;
-        asid_t asid;
+        cap_t vspaceRootCap;
+        vspace_root_t *vspaceRoot;
+        asid_t asid, frame_asid;
         vm_rights_t vmRights;
         vm_page_size_t frameSize;
         vm_attributes_t attributes;
@@ -2016,28 +2027,22 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, unsigned int length
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        if (unlikely(cap_frame_cap_get_capFMappedASID(cap) != 0)) {
-            current_syscall_error.type = seL4_InvalidCapability;
-            current_syscall_error.invalidCapNumber = 0;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
         vaddr = getSyscallArg(0, buffer);
         attributes = vmAttributesFromWord(getSyscallArg(2, buffer));
-        pgdCap = extraCaps.excaprefs[0]->cap;
+        vspaceRootCap = extraCaps.excaprefs[0]->cap;
 
         frameSize = cap_frame_cap_get_capFSize(cap);
         vmRights = maskVMRights(cap_frame_cap_get_capFVMRights(cap),
                                 rightsFromWord(getSyscallArg(1, buffer)));
 
-        if (unlikely(!isValidNativeRoot(pgdCap))) {
+        if (unlikely(!isValidNativeRoot(vspaceRootCap))) {
             current_syscall_error.type = seL4_InvalidCapability;
             current_syscall_error.invalidCapNumber = 1;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        pgd = PGDE_PTR(cap_page_global_directory_cap_get_capPGDBasePtr(pgdCap));
-        asid = cap_page_global_directory_cap_get_capPGDMappedASID(pgdCap);
+        vspaceRoot = cap_vtable_root_get_basePtr(vspaceRootCap);
+        asid = cap_vtable_root_get_mappedASID(vspaceRootCap);
 
         find_ret = findVSpaceForASID(asid);
         if (unlikely(find_ret.status != EXCEPTION_NONE)) {
@@ -2046,7 +2051,7 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, unsigned int length
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        if (unlikely(find_ret.vspace_root != pgd)) {
+        if (unlikely(find_ret.vspace_root != vspaceRoot)) {
             current_syscall_error.type = seL4_InvalidCapability;
             current_syscall_error.invalidCapNumber = 1;
             return EXCEPTION_SYSCALL_ERROR;
@@ -2057,10 +2062,28 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, unsigned int length
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        if (unlikely(vaddr + BIT(pageBitsForSize(frameSize)) - 1 > USER_TOP)) {
-            current_syscall_error.type = seL4_InvalidArgument;
-            current_syscall_error.invalidArgumentNumber = 0;
-            return EXCEPTION_SYSCALL_ERROR;
+        /* In the case of remap, the cap should have a valid asid */
+        frame_asid = cap_frame_cap_ptr_get_capFMappedASID(&cap);
+
+        if (frame_asid != asidInvalid) {
+            if (frame_asid != asid) {
+                userError("ARMPageMap: Attempting to remap a frame that does not belong to the passed address space");
+                current_syscall_error.type = seL4_InvalidCapability;
+                current_syscall_error.invalidArgumentNumber = 0;
+                return EXCEPTION_SYSCALL_ERROR;
+
+            } else if (cap_frame_cap_get_capFMappedAddress(cap) != vaddr) {
+                userError("ARMPageMap: Attempting to map frame into multiple addresses");
+                current_syscall_error.type = seL4_InvalidArgument;
+                current_syscall_error.invalidArgumentNumber = 2;
+                return EXCEPTION_SYSCALL_ERROR;
+            }
+        } else {
+            if (unlikely(vaddr + BIT(pageBitsForSize(frameSize)) - 1 > USER_TOP)) {
+                current_syscall_error.type = seL4_InvalidArgument;
+                current_syscall_error.invalidArgumentNumber = 0;
+                return EXCEPTION_SYSCALL_ERROR;
+            }
         }
 
         cap = cap_frame_cap_set_capFMappedASID(cap, asid);
@@ -2069,16 +2092,11 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, unsigned int length
         base = pptr_to_paddr((void *)cap_frame_cap_get_capFBasePtr(cap));
 
         if (frameSize == ARMSmallPage) {
-            lookupPTSlot_ret_t lu_ret = lookupPTSlot(pgd, vaddr);
+            lookupPTSlot_ret_t lu_ret = lookupPTSlot(vspaceRoot, vaddr);
 
             if (unlikely(lu_ret.status != EXCEPTION_NONE)) {
                 current_syscall_error.type = seL4_FailedLookup;
                 current_syscall_error.failedLookupWasSource = false;
-                return EXCEPTION_SYSCALL_ERROR;
-            }
-
-            if (pte_ptr_get_present(lu_ret.ptSlot)) {
-                current_syscall_error.type = seL4_DeleteFirst;
                 return EXCEPTION_SYSCALL_ERROR;
             }
 
@@ -2087,17 +2105,11 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, unsigned int length
                                                  makeUser3rdLevel(base, vmRights, attributes), lu_ret.ptSlot);
 
         } else if (frameSize == ARMLargePage) {
-            lookupPDSlot_ret_t lu_ret = lookupPDSlot(pgd, vaddr);
+            lookupPDSlot_ret_t lu_ret = lookupPDSlot(vspaceRoot, vaddr);
 
             if (unlikely(lu_ret.status != EXCEPTION_NONE)) {
                 current_syscall_error.type = seL4_FailedLookup;
                 current_syscall_error.failedLookupWasSource = false;
-                return EXCEPTION_SYSCALL_ERROR;
-            }
-
-            if (pde_pde_small_ptr_get_present(lu_ret.pdSlot) ||
-                pde_pde_large_ptr_get_present(lu_ret.pdSlot)) {
-                current_syscall_error.type = seL4_DeleteFirst;
                 return EXCEPTION_SYSCALL_ERROR;
             }
 
@@ -2106,96 +2118,13 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, unsigned int length
                                                  makeUser2ndLevel(base, vmRights, attributes), lu_ret.pdSlot);
 
         } else {
-            lookupPUDSlot_ret_t lu_ret = lookupPUDSlot(pgd, vaddr);
+            lookupPUDSlot_ret_t lu_ret = lookupPUDSlot(vspaceRoot, vaddr);
 
             if (unlikely(lu_ret.status != EXCEPTION_NONE)) {
                 current_syscall_error.type = seL4_FailedLookup;
                 current_syscall_error.failedLookupWasSource = false;
                 return EXCEPTION_SYSCALL_ERROR;
             }
-
-            if (pude_pude_pd_ptr_get_present(lu_ret.pudSlot) ||
-                pude_pude_1g_ptr_get_present(lu_ret.pudSlot)) {
-                current_syscall_error.type = seL4_DeleteFirst;
-                return EXCEPTION_SYSCALL_ERROR;
-            }
-
-            setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
-            return performHugePageInvocationMap(asid, cap, cte,
-                                                makeUser1stLevel(base, vmRights, attributes), lu_ret.pudSlot);
-        }
-    }
-
-    case ARMPageRemap: {
-        vptr_t vaddr;
-        paddr_t base;
-        cap_t pgdCap;
-        pgde_t *pgd;
-        asid_t asid;
-        vm_rights_t vmRights;
-        vm_page_size_t frameSize;
-        vm_attributes_t attributes;
-        findVSpaceForASID_ret_t find_ret;
-
-        if (unlikely(length < 2 || extraCaps.excaprefs[0] == NULL)) {
-            current_syscall_error.type = seL4_TruncatedMessage;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        attributes = vmAttributesFromWord(getSyscallArg(1, buffer));
-        pgdCap = extraCaps.excaprefs[0]->cap;
-
-        frameSize = cap_frame_cap_get_capFSize(cap);
-        vmRights = maskVMRights(cap_frame_cap_get_capFVMRights(cap),
-                                rightsFromWord(getSyscallArg(0, buffer)));
-
-        if (unlikely(!isValidNativeRoot(pgdCap))) {
-            current_syscall_error.type = seL4_InvalidCapability;
-            current_syscall_error.invalidCapNumber = 1;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        pgd = PGDE_PTR(cap_page_global_directory_cap_get_capPGDBasePtr(pgdCap));
-        asid = cap_page_global_directory_cap_get_capPGDMappedASID(pgdCap);
-
-        find_ret = findVSpaceForASID(asid);
-        if (unlikely(find_ret.status != EXCEPTION_NONE)) {
-            current_syscall_error.type = seL4_FailedLookup;
-            current_syscall_error.failedLookupWasSource = false;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        if (unlikely(find_ret.vspace_root != pgd)) {
-            current_syscall_error.type = seL4_InvalidCapability;
-            current_syscall_error.invalidCapNumber = 1;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        if (unlikely(cap_frame_cap_get_capFMappedASID(cap) != asid)) {
-            current_syscall_error.type = seL4_InvalidCapability;
-            current_syscall_error.invalidCapNumber = 0;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        base = pptr_to_paddr((void *)cap_frame_cap_get_capFBasePtr(cap));
-        vaddr = cap_frame_cap_get_capFMappedAddress(cap);
-
-        if (frameSize == ARMSmallPage) {
-            lookupPTSlot_ret_t lu_ret = lookupPTSlot(pgd, vaddr);
-
-            setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
-            return performSmallPageInvocationMap(asid, cap, cte,
-                                                 makeUser3rdLevel(base, vmRights, attributes), lu_ret.ptSlot);
-
-        } else if (frameSize == ARMLargePage) {
-            lookupPDSlot_ret_t lu_ret = lookupPDSlot(pgd, vaddr);
-
-            setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
-            return performLargePageInvocationMap(asid, cap, cte,
-                                                 makeUser2ndLevel(base, vmRights, attributes), lu_ret.pdSlot);
-
-        } else {
-            lookupPUDSlot_ret_t lu_ret = lookupPUDSlot(pgd, vaddr);
 
             setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
             return performHugePageInvocationMap(asid, cap, cte,
@@ -2280,14 +2209,13 @@ exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
                                    word_t *buffer)
 {
     switch (cap_get_capType(cap)) {
-    case cap_page_global_directory_cap:
-        return decodeARMPageGlobalDirectoryInvocation(invLabel, length, cte,
-                                                      cap, extraCaps, buffer);
-
+    case cap_vtable_root_cap:
+        return decodeARMVSpaceRootInvocation(invLabel, length, cte, cap, extraCaps, buffer);
+#ifndef AARCH64_VSPACE_S2_START_L1
     case cap_page_upper_directory_cap:
         return decodeARMPageUpperDirectoryInvocation(invLabel, length, cte,
                                                      cap, extraCaps, buffer);
-
+#endif
     case cap_page_directory_cap:
         return decodeARMPageDirectoryInvocation(invLabel, length, cte,
                                                 cap, extraCaps, buffer);
@@ -2394,8 +2322,7 @@ exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
         vspaceCapSlot = extraCaps.excaprefs[0];
         vspaceCap = vspaceCapSlot->cap;
 
-        if (unlikely(!isVTableRoot(vspaceCap) ||
-                     cap_page_global_directory_cap_get_capPGDIsMapped(vspaceCap))) {
+        if (unlikely(!isVTableRoot(vspaceCap) || cap_vtable_root_isMapped(vspaceCap))) {
             current_syscall_error.type = seL4_InvalidCapability;
             current_syscall_error.invalidCapNumber = 1;
 
@@ -2501,19 +2428,19 @@ static readWordFromVSpace_ret_t readWordFromVSpace(vspace_root_t *pd, word_t vad
 void Arch_userStackTrace(tcb_t *tptr)
 {
     cap_t threadRoot;
-    pgde_t *pgd;
+    vspace_root_t *vspaceRoot;
     word_t sp;
     int i;
 
     threadRoot = TCB_PTR_CTE_PTR(tptr, tcbVTable)->cap;
 
-    /* lookup the PGD */
-    if (cap_get_capType(threadRoot) != cap_page_global_directory_cap) {
+    /* lookup the vspace root */
+    if (cap_get_capType(threadRoot) != cap_vtable_root_cap) {
         printf("Invalid vspace\n");
         return;
     }
 
-    pgd = PGDE_PTR(cap_page_global_directory_cap_get_capPGDBasePtr(threadRoot));
+    vspaceRoot = cap_vtable_root_get_basePtr(threadRoot);
     sp = getRegister(tptr, SP_EL0);
 
     /* check for alignment so we don't have to worry about accessing
@@ -2526,7 +2453,7 @@ void Arch_userStackTrace(tcb_t *tptr)
     for (i = 0; i < CONFIG_USER_STACK_TRACE_LENGTH; i++) {
         word_t address = sp + (i * sizeof(word_t));
         readWordFromVSpace_ret_t result;
-        result = readWordFromVSpace(pgd, address);
+        result = readWordFromVSpace(vspaceRoot, address);
         if (result.status == EXCEPTION_NONE) {
             printf("0x%lx: 0x%lx\n", (unsigned long)address, (unsigned long)result.value);
         } else {

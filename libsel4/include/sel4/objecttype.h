@@ -19,6 +19,10 @@ typedef enum api_object {
     seL4_EndpointObject,
     seL4_NotificationObject,
     seL4_CapTableObject,
+#ifdef CONFIG_KERNEL_MCS
+    seL4_SchedContextObject,
+    seL4_ReplyObject,
+#endif
     seL4_NonArchObjectTypeCount,
 } seL4_ObjectType;
 

@@ -16,6 +16,24 @@ if(KernelArchARM)
     set_property(TARGET kernel_config_target APPEND PROPERTY TOPLEVELTYPES pde_C)
 endif()
 
+set(KernelArmPASizeBits40 OFF)
+set(KernelArmPASizeBits44 OFF)
+if(KernelArmCortexA53)
+    set(KernelArmPASizeBits40 ON)
+    math(EXPR KernelPaddrUserTop "(1 << 40) - 1")
+elseif(KernelArmCortexA57)
+    set(KernelArmPASizeBits44 ON)
+    math(EXPR KernelPaddrUserTop "(1 << 44) - 1")
+endif()
+config_set(KernelArmPASizeBits40 ARM_PA_SIZE_BITS_40 "${KernelArmPASizeBits40}")
+config_set(KernelArmPASizeBits44 ARM_PA_SIZE_BITS_44 "${KernelArmPASizeBits44}")
+
+if(KernelSel4ArchAarch32)
+    # 64-bit targets may be building in 32-bit mode,
+    # so make sure maximum paddr is 32-bit.
+    math(EXPR KernelPaddrUserTop "(1 << 32) - 1")
+endif()
+
 include(src/arch/arm/armv/armv6/config.cmake)
 include(src/arch/arm/armv/armv7-a/config.cmake)
 include(src/arch/arm/armv/armv8-a/config.cmake)
@@ -65,7 +83,7 @@ config_option(
     KernelArmHypervisorSupport ARM_HYPERVISOR_SUPPORT
     "Build as Hypervisor. Utilise ARM virtualisation extensions to build the kernel as a hypervisor"
     DEFAULT ${default_hyp_support}
-    DEPENDS "KernelArmCortexA15 OR KernelArmCortexA57"
+    DEPENDS "KernelArmCortexA15 OR KernelArmCortexA57 OR KernelArmCortexA53"
 )
 
 config_option(
@@ -126,26 +144,6 @@ config_option(
     DEPENDS "KernelArchArmV7a OR KernelArchArmV8a;NOT KernelArmCortexA8"
 )
 
-config_option(
-    KernelArmExportPCNTUser EXPORT_PCNT_USER "PL0 access to generic timer CNTPCT and CNTFRQ. \
-    Grant user access to physical counter and counter \
-    frequency registers of the generic timer. \
-    WARNING: selecting this option opens a timing \
-    channel"
-    DEFAULT OFF
-    DEPENDS "KernelArmCortexA15"
-)
-
-config_option(
-    KernelArmExportVCNTUser EXPORT_VCNT_USER "PL0 access to generic timer CNTVCT and CNTFRQ. \
-    Grant user access to virtual counter and counter \
-    frequency registers of the generic timer. \
-    WARNING: selecting this option opens a timing \
-    channel"
-    DEFAULT OFF
-    DEPENDS "KernelArmCortexA15 OR KernelArmCortexA53"
-)
-
 config_option(KernelARMSMMUInterruptEnable SMMU_INTERRUPT_ENABLE "Enable SMMU interrupts. \
     SMMU interrupts currently only serve a debug purpose as \
     they are not forwarded to user level. Enabling this will \
@@ -170,12 +168,28 @@ if(KernelAArch32FPUEnableContextSwitch OR KernelSel4ArchAarch64)
     set(KernelHaveFPU ON)
 endif()
 
+if(KernelSel4ArchAarch64)
+    set(KernelHardwareDebugAPIUnsupported ON CACHE INTERNAL "")
+endif()
+
+if(
+    KernelArmCortexA7
+    OR KernelArmCortexA8
+    OR KernelArmCortexA15
+    OR KernelArmCortexA53
+    OR KernelArmCortexA57
+)
+    config_set(KernelArmCacheLineSizeBits L1_CACHE_LINE_SIZE_BITS "6")
+elseif(KernelArmCortexA9 OR KernelArm1136JF_S)
+    config_set(KernelArmCacheLineSizeBits L1_CACHE_LINE_SIZE_BITS "5")
+endif()
+
 if(KernelArchArmV6)
-	# This is currently needed in ARMv6 to provide thread IDs via the
-	# globals frame. The globals frame should be removed along with this
-	# in favour of reserving r9 as a thread ID register.
-	#
-	# See SELFOUR-2253
+    # This is currently needed in ARMv6 to provide thread IDs via the
+    # globals frame. The globals frame should be removed along with this
+    # in favour of reserving r9 as a thread ID register.
+    #
+    # See SELFOUR-2253
     set(KernelSetTLSBaseSelf ON)
 endif()
 
@@ -214,5 +228,4 @@ add_sources(
 
 add_bf_source_old("KernelArchARM" "structures.bf" "include/arch/arm" "arch/object")
 
-include(src/arch/arm/32/config.cmake)
-include(src/arch/arm/64/config.cmake)
+include(src/arch/arm/${KernelWordSize}/config.cmake)

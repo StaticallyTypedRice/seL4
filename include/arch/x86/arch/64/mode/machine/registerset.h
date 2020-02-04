@@ -41,7 +41,13 @@ enum _register {
     RBX                     = 3,    /* 0x18 */
     RBP                     = 4,    /* 0x20 */
     R12                     = 5,    /* 0x28 */
+#ifdef CONFIG_KERNEL_MCS
+    replyRegister           = 5,
+#endif
     R13                     = 6,    /* 0x30 */
+#ifdef CONFIG_KERNEL_MCS
+    nbsendRecvDest          = 6,
+#endif
     R14                     = 7,    /* 0x38 */
     RDX                     = 8,    /* 0x40 */
     // Group the message registers so they can be efficiently copied
@@ -80,7 +86,10 @@ enum messageSizes {
     n_frameRegisters = 18,
     n_gpRegisters = 2,
     n_exceptionMessage = 3,
-    n_syscallMessage = 18
+    n_syscallMessage = 18,
+#ifdef CONFIG_KERNEL_MCS
+    n_timeoutMessage = 19,
+#endif
 };
 
 #define SYSCALL_MESSAGE \
@@ -110,6 +119,29 @@ enum messageSizes {
     [seL4_UserException_FaultIP] = FaultIP,\
     [seL4_UserException_SP] = RSP,\
     [seL4_UserException_FLAGS] = FLAGS\
+}
+
+#define TIMEOUT_REPLY_MESSAGE \
+{ \
+    [seL4_TimeoutReply_FaultIP] = FaultIP,\
+    [seL4_TimeoutReply_RSP] = RSP,\
+    [seL4_TimeoutReply_FLAGS] = FLAGS,\
+    [seL4_TimeoutReply_RAX] = RAX,\
+    [seL4_TimeoutReply_RBX] = RBX,\
+    [seL4_TimeoutReply_RCX] = RCX,\
+    [seL4_TimeoutReply_RDX] = RDX,\
+    [seL4_TimeoutReply_RSI] = RSI,\
+    [seL4_TimeoutReply_RDI] = RDI,\
+    [seL4_TimeoutReply_RBP] = RBP,\
+    [seL4_TimeoutReply_R8] = R8,\
+    [seL4_TimeoutReply_R9] = R9,\
+    [seL4_TimeoutReply_R10] = R10,\
+    [seL4_TimeoutReply_R11] = R11,\
+    [seL4_TimeoutReply_R12] = R12,\
+    [seL4_TimeoutReply_R13] = R13,\
+    [seL4_TimeoutReply_R14] = R14,\
+    [seL4_TimeoutReply_R15] = R15,\
+    [seL4_TimeoutReply_TLS_BASE] = TLS_BASE,\
 }
 
 extern const register_t msgRegisters[];

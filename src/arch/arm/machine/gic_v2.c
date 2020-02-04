@@ -101,7 +101,7 @@ BOOT_CODE static void dist_init(void)
 
     /* group 0 for secure; group 1 for non-secure */
     for (i = 0; i < nirqs; i += 32) {
-        if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
+        if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT) && !config_set(CONFIG_PLAT_QEMU_ARM_VIRT)) {
             gic_dist->security[i >> 5] = 0xffffffff;
         } else {
             gic_dist->security[i >> 5] = 0;
@@ -120,7 +120,7 @@ BOOT_CODE static void cpu_iface_init(void)
     gic_dist->pending_clr[0] = IRQ_SET_ALL;
 
     /* put everything in group 0; group 1 if in hyp mode */
-    if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
+    if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT) && !config_set(CONFIG_PLAT_QEMU_ARM_VIRT)) {
         gic_dist->security[0] = 0xffffffff;
         gic_dist->priority[0] = 0x80808080;
     } else {
@@ -156,8 +156,8 @@ void setIRQTrigger(irq_t irq, bool_t trigger)
     /* in the gic_config, there is a 2 bit field for each irq,
      * setting the most significant bit of this field makes the irq edge-triggered,
      * while 0 indicates that it is level-triggered */
-    word_t index = irq / 16u;
-    word_t offset = (irq % 16u) * 2;
+    word_t index = IDX_TO_IRQ(irq) / 16u;
+    word_t offset = (IDX_TO_IRQ(irq) % 16u) * 2;
     if (trigger) {
         /* set the bit */
         gic_dist->config[index] |= BIT(offset + 1);
@@ -168,6 +168,8 @@ void setIRQTrigger(irq_t irq, bool_t trigger)
 
 BOOT_CODE void initIRQController(void)
 {
+    /* irqInvalid cannot correspond to a valid IRQ index into the irq state array */
+    assert(INT_STATE_ARRAY_SIZE < irqInvalid);
     dist_init();
 }
 
@@ -214,13 +216,14 @@ void setIRQTarget(irq_t irq, seL4_Word target)
 {
     uint8_t targetList = 1 << target;
     uint8_t *targets = (void *)(gic_dist->targets);
+    word_t hwIRQ = IDX_TO_IRQ(irq);
 
     /* Return early if PPI */
-    if (irq < SPI_START) {
+    if (IRQ_IS_PPI(irq)) {
         fail("PPI can't have designated target core\n");
         return;
     }
-    targets[irq] = targetList;
+    targets[hwIRQ] = targetList;
 }
 #endif /* ENABLE_SMP_SUPPORT */
 

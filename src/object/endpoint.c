@@ -18,24 +18,19 @@
 #include <object/endpoint.h>
 #include <object/tcb.h>
 
-static inline tcb_queue_t PURE ep_ptr_get_queue(endpoint_t *epptr)
-{
-    tcb_queue_t queue;
-
-    queue.head = (tcb_t *)endpoint_ptr_get_epQueue_head(epptr);
-    queue.end = (tcb_t *)endpoint_ptr_get_epQueue_tail(epptr);
-
-    return queue;
-}
-
 static inline void ep_ptr_set_queue(endpoint_t *epptr, tcb_queue_t queue)
 {
     endpoint_ptr_set_epQueue_head(epptr, (word_t)queue.head);
     endpoint_ptr_set_epQueue_tail(epptr, (word_t)queue.end);
 }
 
+#ifdef CONFIG_KERNEL_MCS
+void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
+             bool_t canGrant, bool_t canGrantReply, bool_t canDonate, tcb_t *thread, endpoint_t *epptr)
+#else
 void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
              bool_t canGrant, bool_t canGrantReply, tcb_t *thread, endpoint_t *epptr)
+#endif
 {
     switch (endpoint_ptr_get_state(epptr)) {
     case EPState_Idle:
@@ -70,7 +65,6 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
     case EPState_Recv: {
         tcb_queue_t queue;
         tcb_t *dest;
-        bool_t replyCanGrant;
 
         /* Get the head of the endpoint queue. */
         queue = ep_ptr_get_queue(epptr);
@@ -90,7 +84,30 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
         /* Do the transfer */
         doIPCTransfer(thread, epptr, badge, canGrant, dest);
 
-        replyCanGrant = thread_state_ptr_get_blockingIPCCanGrant(&dest->tcbState);;
+#ifdef CONFIG_KERNEL_MCS
+        reply_t *reply = REPLY_PTR(thread_state_get_replyObject(dest->tcbState));
+        if (reply) {
+            reply_unlink(reply);
+        }
+
+        if (do_call ||
+            seL4_Fault_ptr_get_seL4_FaultType(&thread->tcbFault) != seL4_Fault_NullFault) {
+            if (reply != NULL && (canGrant || canGrantReply)) {
+                reply_push(thread, dest, reply, canDonate);
+            } else {
+                setThreadState(thread, ThreadState_Inactive);
+            }
+        } else if (canDonate && dest->tcbSchedContext == NULL) {
+            schedContext_donate(thread->tcbSchedContext, dest);
+        }
+
+        /* blocked threads should have enough budget to get out of the kernel */
+        assert(dest->tcbSchedContext == NULL || refill_sufficient(dest->tcbSchedContext, 0));
+        assert(dest->tcbSchedContext == NULL || refill_ready(dest->tcbSchedContext));
+        setThreadState(dest, ThreadState_Running);
+        possibleSwitchTo(dest);
+#else
+        bool_t replyCanGrant = thread_state_ptr_get_blockingIPCCanGrant(&dest->tcbState);;
 
         setThreadState(dest, ThreadState_Running);
         possibleSwitchTo(dest);
@@ -102,13 +119,17 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
                 setThreadState(thread, ThreadState_Inactive);
             }
         }
-
+#endif
         break;
     }
     }
 }
 
+#ifdef CONFIG_KERNEL_MCS
+void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking, cap_t replyCap)
+#else
 void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
+#endif
 {
     endpoint_t *epptr;
     notification_t *ntfnPtr;
@@ -117,6 +138,17 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
     assert(cap_get_capType(cap) == cap_endpoint_cap);
 
     epptr = EP_PTR(cap_endpoint_cap_get_capEPPtr(cap));
+
+#ifdef CONFIG_KERNEL_MCS
+    reply_t *replyPtr = NULL;
+    if (cap_get_capType(replyCap) == cap_reply_cap) {
+        replyPtr = REPLY_PTR(cap_reply_cap_get_capReplyPtr(replyCap));
+        if (unlikely(replyPtr->replyTCB != NULL && replyPtr->replyTCB != thread)) {
+            userError("Reply object already has unexecuted reply!");
+            cancelIPC(replyPtr->replyTCB);
+        }
+    }
+#endif
 
     /* Check for anything waiting in the notification */
     ntfnPtr = thread->tcbBoundNotification;
@@ -134,9 +166,15 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
                                             ThreadState_BlockedOnReceive);
                 thread_state_ptr_set_blockingObject(
                     &thread->tcbState, EP_REF(epptr));
+#ifdef CONFIG_KERNEL_MCS
+                thread_state_ptr_set_replyObject(&thread->tcbState, REPLY_REF(replyPtr));
+                if (replyPtr) {
+                    replyPtr->replyTCB = thread;
+                }
+#else
                 thread_state_ptr_set_blockingIPCCanGrant(
                     &thread->tcbState, cap_endpoint_cap_get_capCanGrant(cap));
-
+#endif
                 scheduleTCB(thread);
 
                 /* Place calling thread in endpoint queue */
@@ -186,6 +224,20 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
 
             do_call = thread_state_ptr_get_blockingIPCIsCall(&sender->tcbState);
 
+#ifdef CONFIG_KERNEL_MCS
+            if (do_call ||
+                seL4_Fault_get_seL4_FaultType(sender->tcbFault) != seL4_Fault_NullFault) {
+                if ((canGrant || canGrantReply) && replyPtr != NULL) {
+                    reply_push(sender, thread, replyPtr, sender->tcbSchedContext != NULL);
+                } else {
+                    setThreadState(sender, ThreadState_Inactive);
+                }
+            } else {
+                setThreadState(sender, ThreadState_Running);
+                possibleSwitchTo(sender);
+                assert(sender->tcbSchedContext == NULL || refill_sufficient(sender->tcbSchedContext, 0));
+            }
+#else
             if (do_call) {
                 if (canGrant || canGrantReply) {
                     setupCallerCap(sender, thread, cap_endpoint_cap_get_capCanGrant(cap));
@@ -196,7 +248,7 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
                 setThreadState(sender, ThreadState_Running);
                 possibleSwitchTo(sender);
             }
-
+#endif
             break;
         }
         }
@@ -226,6 +278,11 @@ void cancelIPC(tcb_t *tptr)
 {
     thread_state_t *state = &tptr->tcbState;
 
+#ifdef CONFIG_KERNEL_MCS
+    /* cancel ipc cancels all faults */
+    seL4_Fault_NullFault_ptr_new(&tptr->tcbFault);
+#endif
+
     switch (thread_state_ptr_get_tsType(state)) {
     case ThreadState_BlockedOnSend:
     case ThreadState_BlockedOnReceive: {
@@ -247,6 +304,12 @@ void cancelIPC(tcb_t *tptr)
             endpoint_ptr_set_state(epptr, EPState_Idle);
         }
 
+#ifdef CONFIG_KERNEL_MCS
+        reply_t *reply = REPLY_PTR(thread_state_get_replyObject(tptr->tcbState));
+        if (reply != NULL) {
+            reply_unlink(reply);
+        }
+#endif
         setThreadState(tptr, ThreadState_Inactive);
         break;
     }
@@ -257,6 +320,9 @@ void cancelIPC(tcb_t *tptr)
         break;
 
     case ThreadState_BlockedOnReply: {
+#ifdef CONFIG_KERNEL_MCS
+        reply_remove_tcb(tptr);
+#else
         cte_t *slot, *callerCap;
 
         tptr->tcbFault = seL4_Fault_NullFault_new();
@@ -270,6 +336,7 @@ void cancelIPC(tcb_t *tptr)
                 gs_set_assn cteDeleteOne_'proc (ucast cap_reply_cap))" */
             cteDeleteOne(callerCap);
         }
+#endif
 
         break;
     }
@@ -292,8 +359,21 @@ void cancelAllIPC(endpoint_t *epptr)
 
         /* Set all blocked threads to restart */
         for (; thread; thread = thread->tcbEPNext) {
+#ifdef CONFIG_KERNEL_MCS
+            reply_t *reply = REPLY_PTR(thread_state_get_replyObject(thread->tcbState));
+            if (reply != NULL) {
+                reply_unlink(reply);
+            }
+            if (seL4_Fault_get_seL4_FaultType(thread->tcbFault) == seL4_Fault_NullFault) {
+                setThreadState(thread, ThreadState_Restart);
+                possibleSwitchTo(thread);
+            } else {
+                setThreadState(thread, ThreadState_Inactive);
+            }
+#else
             setThreadState(thread, ThreadState_Restart);
             SCHED_ENQUEUE(thread);
+#endif
         }
 
         rescheduleRequired();
@@ -324,11 +404,26 @@ void cancelBadgedSends(endpoint_t *epptr, word_t badge)
             word_t b = thread_state_ptr_get_blockingIPCBadge(
                            &thread->tcbState);
             next = thread->tcbEPNext;
+#ifdef CONFIG_KERNEL_MCS
+            /* senders do not have reply objects in their state, and we are only cancelling sends */
+            assert(REPLY_PTR(thread_state_get_replyObject(thread->tcbState)) == NULL);
+            if (b == badge) {
+                if (seL4_Fault_get_seL4_FaultType(thread->tcbFault) ==
+                    seL4_Fault_NullFault) {
+                    setThreadState(thread, ThreadState_Restart);
+                    possibleSwitchTo(thread);
+                } else {
+                    setThreadState(thread, ThreadState_Inactive);
+                }
+                queue = tcbEPDequeue(thread, queue);
+            }
+#else
             if (b == badge) {
                 setThreadState(thread, ThreadState_Restart);
                 SCHED_ENQUEUE(thread);
                 queue = tcbEPDequeue(thread, queue);
             }
+#endif
         }
         ep_ptr_set_queue(epptr, queue);
 
@@ -345,3 +440,13 @@ void cancelBadgedSends(endpoint_t *epptr, word_t badge)
         fail("invalid EP state");
     }
 }
+
+#ifdef CONFIG_KERNEL_MCS
+void reorderEP(endpoint_t *epptr, tcb_t *thread)
+{
+    tcb_queue_t queue = ep_ptr_get_queue(epptr);
+    queue = tcbEPDequeue(thread, queue);
+    queue = tcbEPAppend(thread, queue);
+    ep_ptr_set_queue(epptr, queue);
+}
+#endif

@@ -117,7 +117,7 @@ function(GenBFCommand args target_name pbf_path pbf_target deps)
     add_custom_command(
         OUTPUT "${target_name_absolute}"
         COMMAND
-            "${PYTHON}" "${BF_GEN_PATH}" "${args}" "${pbf_path_absolute}" "${target_name_absolute}"
+            "${PYTHON3}" "${BF_GEN_PATH}" "${args}" "${pbf_path_absolute}" "${target_name_absolute}"
         DEPENDS
             "${BF_GEN_PATH}"
             "${pbf_path_absolute}"
@@ -259,6 +259,11 @@ function(config_option optionname configname doc)
             set(${optionname} "${CONFIG_DEFAULT}" CACHE BOOL "${doc}" FORCE)
             unset(${optionname}_DISABLED CACHE)
         endif()
+        # This is a directory scope setting used to allow or prevent config options
+        # from appearing in the cmake config GUI
+        if(SEL4_CONFIG_DEFAULT_ADVANCED)
+            mark_as_advanced(${optionname})
+        endif()
     else()
         set(${optionname} "${CONFIG_DEFAULT_DISABLED}" CACHE INTERNAL "${doc}" FORCE)
         set(${optionname}_DISABLED TRUE CACHE INTERNAL "" FORCE)
@@ -353,6 +358,11 @@ function(config_string optionname configname doc)
             APPEND
                 local_config_string "#define CONFIG_${configname} ${quote}@${optionname}@${quote}"
         )
+        # This is a directory scope setting used to allow or prevent config options
+        # from appearing in the cmake config GUI
+        if(SEL4_CONFIG_DEFAULT_ADVANCED)
+            mark_as_advanced(${optionname})
+        endif()
     else()
         if(CONFIG_UNDEF_DISABLED)
             unset(${optionname} CACHE)
@@ -479,6 +489,11 @@ function(config_choice optionname configname doc)
         list(APPEND local_config_string "#define CONFIG_${configname} @${optionname}@")
         set(configure_string "${local_config_string}" PARENT_SCOPE)
         set(${optionname} "${default}" CACHE STRING "${doc}" ${force_default})
+        # This is a directory scope setting used to allow or prevent config options
+        # from appearing in the cmake config GUI
+        if(SEL4_CONFIG_DEFAULT_ADVANCED)
+            mark_as_advanced(${optionname})
+        endif()
         set_property(CACHE ${optionname} PROPERTY STRINGS ${strings})
         if(NOT found_current)
             # The option is actually enabled, but we didn't enable the correct
@@ -661,5 +676,47 @@ macro(check_outfile_stale stale outfile deps_list arg_cache)
     endif()
     if(${stale})
         file(WRITE "${arg_cache}" "${_outfile_command}")
+    endif()
+endmacro()
+
+# This macro only works when cmake is invoked with -P (script mode) on a kernel
+# verified configuration. The result is configuring and building a verified kernel.
+# CMAKE_ARGC and CMAKE_ARGV# contain command line argument information.
+# It runs the following commands to produce kernel.elf and kernel_all_pp.c:
+# cmake -G Ninja ${args} -C ${CMAKE_ARGV2} ${CMAKE_CURRENT_LIST_DIR}/..
+# ninja kernel.elf
+# ninja kernel_all_pp_wrapper
+macro(cmake_script_build_kernel)
+    if(NOT "${CMAKE_ARGC}" STREQUAL "")
+        set(args "")
+        foreach(i RANGE 3 ${CMAKE_ARGC})
+            if("${CMAKE_ARGV${i}}" STREQUAL "FORCE")
+                # Consume arg and force reinit of build dir by deleting CMakeCache.txt
+                file(REMOVE CMakeCache.txt)
+                file(REMOVE gcc.cmake)
+            else()
+                list(APPEND args ${CMAKE_ARGV${i}})
+            endif()
+        endforeach()
+        execute_process(
+            COMMAND
+                cmake -G Ninja ${args} -C ${CMAKE_ARGV2} ${CMAKE_CURRENT_LIST_DIR}/..
+            INPUT_FILE /dev/stdin
+            OUTPUT_FILE /dev/stdout
+            ERROR_FILE /dev/stderr
+        )
+        execute_process(
+            COMMAND ninja kernel.elf
+            INPUT_FILE /dev/stdin
+            OUTPUT_FILE /dev/stdout
+            ERROR_FILE /dev/stderr
+        )
+        execute_process(
+            COMMAND ninja kernel_all_pp_wrapper
+            INPUT_FILE /dev/stdin
+            OUTPUT_FILE /dev/stdout
+            ERROR_FILE /dev/stderr
+        )
+        return()
     endif()
 endmacro()

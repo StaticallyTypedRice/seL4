@@ -1,5 +1,5 @@
 #
-# Copyright 2017, Data61
+# Copyright 2019, Data61
 # Commonwealth Scientific and Industrial Research Organisation (CSIRO)
 # ABN 41 687 119 230.
 #
@@ -22,15 +22,12 @@ endforeach()
 
 if(KernelPlatformAM335X)
     declare_seL4_arch(aarch32)
+
+    set(KernelHardwareDebugAPIUnsupported ON CACHE INTERNAL "")
+
     set(KernelArmCortexA8 ON)
     set(KernelArchArmV7a ON)
-    if("${KernelARMPlatform}" STREQUAL "")
-        message(
-            STATUS "Selected platform am335x supports multiple sub platforms but none were given"
-        )
-        message(STATUS "  Defaulting to am335x-boneblack")
-        set(KernelARMPlatform am335x-boneblack)
-    endif()
+    check_platform_and_fallback_to_default(KernelARMPlatform "am335x-boneblack")
     list(FIND plat_lists ${KernelARMPlatform} index)
     if("${index}" STREQUAL "-1")
         message(FATAL_ERROR "Which am335x platform not specified")
@@ -47,10 +44,16 @@ if(KernelPlatformAM335X)
     list(APPEND KernelDTSList "src/plat/am335x/overlay-am335x.dts")
 
     declare_default_headers(
-        TIMER_FREQUENCY 32768llu
         MAX_IRQ 127
         TIMER drivers/timer/am335x.h
-        INTERRUPT_CONTROLLER drivers/irq/am335x.h
+        INTERRUPT_CONTROLLER
+            drivers/irq/am335x.h
+            #  DMTIMER 2-7 have programmable CLKSRC.
+            #  Currently Kernel timer is DMTIMER4 using CLK_M_OSC.
+        TIMER_FREQUENCY 24000000llu
+        CLK_MAGIC 2863311531llu
+        CLK_SHIFT 36u
+        KERNEL_WCET 10u
     )
 endif()
 

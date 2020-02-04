@@ -30,7 +30,12 @@
 #define seL4_SlotBits         4
 #define seL4_TCBBits         11
 #define seL4_EndpointBits     4
+#ifdef CONFIG_KERNEL_MCS
+#define seL4_NotificationBits 5
+#define seL4_ReplyBits        4
+#else
 #define seL4_NotificationBits 4
+#endif
 
 #define seL4_PageTableBits   12
 #define seL4_PageTableEntryBits 2
@@ -109,8 +114,39 @@ enum {
     SEL4_FORCE_LONG_ENUM(seL4_UserException_Msg)
 } seL4_UserException_Msg;
 
+#ifdef CONFIG_KERNEL_MCS
+enum {
+    seL4_Timeout_Data,
+    /* consumed is 64 bits */
+    seL4_Timeout_Consumed_HighBits,
+    seL4_Timeout_Consumed_LowBits,
+    seL4_Timeout_Length,
+    SEL4_FORCE_LONG_ENUM(seL4_Timeout_Msg),
+} seL4_Timeout_Msg;
+
+enum {
+    seL4_TimeoutReply_FaultIP,
+    seL4_TimeoutReply_SP,
+    seL4_TimeoutReply_FLAGS,
+    seL4_TimeoutReply_EAX,
+    seL4_TimeoutReply_EBX,
+    seL4_TimeoutReply_ECX,
+    seL4_TimeoutReply_EDX,
+    seL4_TimeoutReply_ESI,
+    seL4_TimeoutReply_EDI,
+    seL4_TimeoutReply_EBP,
+    seL4_TimeoutReply_FS_BASE,
+    seL4_TimeoutReply_GS_BASE,
+    seL4_TimeoutReply_Length,
+    SEL4_FORCE_LONG_ENUM(seL4_TimeoutReply_Msg)
+} seL4_TimeoutReply_Msg;
+#endif
 #endif /* __ASSEMBLER__ */
+#ifdef CONFIG_KERNEL_MCS
+#define seL4_FastMessageRegisters 1
+#else
 #define seL4_FastMessageRegisters 2
+#endif
 
 /* IPC buffer is 512 bytes, giving size bits of 9 */
 #define seL4_IPCBufferSizeBits 9

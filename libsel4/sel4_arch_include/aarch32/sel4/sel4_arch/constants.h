@@ -122,8 +122,40 @@ enum {
     seL4_VCPUReg_SPSRfiq,
     seL4_VCPUReg_Num,
 } seL4_VCPUReg;
-
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
+
+#ifdef CONFIG_KERNEL_MCS
+enum {
+    seL4_Timeout_Data,
+    /* consumed is 64 bits */
+    seL4_Timeout_Consumed_HighBits,
+    seL4_Timeout_Consumed_LowBits,
+    seL4_Timeout_Length,
+    SEL4_FORCE_LONG_ENUM(seL4_Timeout_Msg)
+} seL4_TimeoutMsg;
+
+enum {
+    seL4_TimeoutReply_FaultIP,
+    seL4_TimeoutReply_SP,
+    seL4_TimeoutReply_CPSR,
+    seL4_TimeoutReply_R0,
+    seL4_TimeoutReply_R1,
+    seL4_TimeoutReply_R8,
+    seL4_TimeoutReply_R9,
+    seL4_TimeoutReply_R10,
+    seL4_TimeoutReply_R11,
+    seL4_TimeoutReply_R12,
+    seL4_TimeoutReply_R2,
+    seL4_TimeoutReply_R3,
+    seL4_TimeoutReply_R4,
+    seL4_TimeoutReply_R5,
+    seL4_TimeoutReply_R6,
+    seL4_TimeoutReply_R7,
+    seL4_TimeoutReply_R14,
+    seL4_TimeoutReply_Length,
+    SEL4_FORCE_LONG_ENUM(seL4_TimeoutReply_Msg)
+} seL4_TimeoutReply_Msg;
+#endif /* CONFIG_KERNEL_MCS */
 #endif /* !__ASSEMBLER__ */
 
 #define seL4_DataFault 0
@@ -151,7 +183,12 @@ enum {
 #endif
 
 #define seL4_EndpointBits 4
+#ifdef CONFIG_KERNEL_MCS
+#define seL4_NotificationBits 5
+#define seL4_ReplyBits 4
+#else
 #define seL4_NotificationBits 4
+#endif
 
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
 #define seL4_PageTableBits 12

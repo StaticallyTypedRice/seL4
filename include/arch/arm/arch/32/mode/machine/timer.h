@@ -15,19 +15,33 @@
 
 #include <config.h>
 #include <stdint.h>
-#include <plat/machine/hardware.h>
-#include <mode/machine.h>
 
-/* Use Hypervisor Physical timer */
-#ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
-#define CNT_TVAL CNTHP_TVAL
-#define CNT_CTL  CNTHP_CTL
-#define CNT_CVAL CNTHP_CVAL
+#ifdef CONFIG_KERNEL_MCS
+#include <util.h>
+
+/* timer function definitions that work for all 32bit arm platforms that provide
+ * CLK_MAGIC and TIMER_CLOCK_MHZ -- these definitions might need to move
+ * if we come across an arm platform that does not suit this model */
+
+/* get the max value ticksToUs can be passed without overflowing */
+static inline CONST ticks_t getMaxTicksToUs(void)
+{
+#if USE_KHZ
+    return UINT64_MAX / KHZ_IN_MHZ / CLK_MAGIC;
 #else
-/* Use virtual timer */
-#define CNT_TVAL CNTV_TVAL
-#define CNT_CTL  CNTV_CTL
-#define CNT_CVAL CNTV_CVAL
+    return UINT64_MAX / CLK_MAGIC;
 #endif
+}
+
+static inline CONST time_t ticksToUs(ticks_t ticks)
+{
+    /* simulate 64bit division using multiplication by reciprocal */
+#if USE_KHZ
+    return (ticks * KHZ_IN_MHZ) * CLK_MAGIC >> CLK_SHIFT;
+#else
+    return (ticks * CLK_MAGIC) >> CLK_SHIFT;
+#endif
+}
+#endif /* CONFIG_KERNEL_MCS */
 
 #endif /* __ARCH_MODE_MACHINE_TIMER_H_ */

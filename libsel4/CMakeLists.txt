@@ -116,6 +116,9 @@ genbf(
     "${CMAKE_CURRENT_BINARY_DIR}/sel4_arch_include/${KernelSel4Arch}/sel4/sel4_arch/types_gen.h"
 )
 
+if(KernelIsMCS)
+    set(mcs --mcs)
+endif()
 add_custom_command(
     OUTPUT include/sel4/syscall.h
     COMMAND rm -f include/sel4/syscall.h
@@ -126,9 +129,9 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/include/api/syscall.xsd"
             "${CMAKE_CURRENT_SOURCE_DIR}/include/api/syscall.xml"
     COMMAND
-        ${PYTHON} "${SYSCALL_ID_GEN_PATH}"
+        ${PYTHON3} "${SYSCALL_ID_GEN_PATH}"
         --xml "${CMAKE_CURRENT_SOURCE_DIR}/include/api/syscall.xml"
-        --libsel4_header include/sel4/syscall.h
+        --libsel4_header include/sel4/syscall.h ${mcs}
     DEPENDS
         "${SYSCALL_ID_GEN_PATH}" "${CMAKE_CURRENT_SOURCE_DIR}/include/api/syscall.xsd"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/api/syscall.xml"
@@ -148,7 +151,7 @@ add_custom_command(
     COMMAND
         echo "CONFIG_WORD_SIZE=${KernelWordSize}" > config
     COMMAND
-        "${PYTHON}" "${SYSCALL_STUB_GEN_PATH}" ${buffer} -a "${KernelSel4Arch}" -c config -o
+        "${PYTHON3}" "${SYSCALL_STUB_GEN_PATH}" ${buffer} ${mcs} -a "${KernelSel4Arch}" -c config -o
         include/interfaces/sel4_client.h ${interface_xmls}
     DEPENDS
         "${SYSCALL_STUB_GEN_PATH}"

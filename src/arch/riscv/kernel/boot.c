@@ -35,6 +35,10 @@ extern char ki_boot_end[1];
 /* pointer to end of kernel image */
 extern char ki_end[1];
 
+#ifdef ENABLE_SMP_SUPPORT
+BOOT_DATA static volatile word_t node_boot_lock = 0;
+#endif
+
 #define MAX_RESERVED 2
 BOOT_DATA static region_t res_reg[MAX_RESERVED];
 
@@ -42,21 +46,10 @@ BOOT_CODE static bool_t create_untypeds(cap_t root_cnode_cap, region_t boot_mem_
 {
     seL4_SlotPos   slot_pos_before;
     seL4_SlotPos   slot_pos_after;
-    region_t       dev_reg;
 
     slot_pos_before = ndks_boot.slot_pos_cur;
+    create_device_untypeds(root_cnode_cap, slot_pos_before);
     bool_t res = create_kernel_untypeds(root_cnode_cap, boot_mem_reuse_reg, slot_pos_before);
-
-    UNUSED paddr_t current_region_pos = 0;
-    for (int i = 0; i < get_num_dev_p_regs(); i++) {
-        assert(get_dev_p_reg(i).start >= current_region_pos);
-        current_region_pos = get_dev_p_reg(i).end;
-        dev_reg = paddr_to_pptr_reg(get_dev_p_reg(i));
-        if (!create_untypeds_for_region(root_cnode_cap, true,
-                                        dev_reg, slot_pos_before)) {
-            return false;
-        }
-    }
 
     slot_pos_after = ndks_boot.slot_pos_cur;
     ndks_boot.bi_frame->untyped = (seL4_SlotRegion) {
@@ -114,7 +107,10 @@ BOOT_CODE static void init_irqs(cap_t root_cnode_cap)
         }
     }
     setIRQState(IRQTimer, KERNEL_TIMER_IRQ);
-
+#ifdef ENABLE_SMP_SUPPORT
+    setIRQState(IRQIPI, irq_remote_call_ipi);
+    setIRQState(IRQIPI, irq_reschedule_ipi);
+#endif
     /* provide the IRQ control cap */
     write_slot(SLOT_PTR(pptr_of_cap(root_cnode_cap), seL4_CapIRQControl), cap_irq_control_cap_new());
 }
@@ -127,10 +123,13 @@ extern char trap_entry[1];
 BOOT_CODE static void init_cpu(void)
 {
 
+    activate_kernel_vspace();
     /* Write trap entry address to stvec */
     write_stvec((word_t)trap_entry);
-
-    activate_kernel_vspace();
+    initLocalIRQController();
+#ifndef CONFIG_KERNEL_MCS
+    initTimer();
+#endif
 }
 
 /* This and only this function initialises the platform. It does NOT initialise any kernel state. */
@@ -138,9 +137,36 @@ BOOT_CODE static void init_cpu(void)
 BOOT_CODE static void init_plat(void)
 {
     initIRQController();
-    initTimer();
 }
 
+
+#ifdef ENABLE_SMP_SUPPORT
+BOOT_CODE static bool_t try_init_kernel_secondary_core(word_t hart_id, word_t core_id)
+{
+    while (!node_boot_lock);
+
+    fence_r_rw();
+
+    init_cpu();
+    NODE_LOCK_SYS;
+
+    ksNumCPUs++;
+    init_core_state(SchedulerAction_ResumeCurrentThread);
+    ifence_local();
+    return true;
+}
+
+BOOT_CODE static void release_secondary_cores(void)
+{
+    node_boot_lock = 1;
+    fence_w_r();
+
+    while (ksNumCPUs != CONFIG_MAX_NUM_NODES) {
+        __atomic_signal_fence(__ATOMIC_ACQ_REL);
+    }
+}
+
+#endif
 /* Main kernel initialisation function. */
 
 static BOOT_CODE bool_t try_init_kernel(
@@ -218,6 +244,10 @@ static BOOT_CODE bool_t try_init_kernel(
         bi_frame_vptr
     );
 
+#ifdef CONFIG_KERNEL_MCS
+    init_sched_control(root_cnode_cap, CONFIG_MAX_NUM_NODES);
+#endif
+
     /* create the initial thread's IPC buffer */
     ipcbuf_cap = create_ipcbuf_frame_cap(root_cnode_cap, it_pd_cap, ipcbuf_vptr);
     if (cap_get_capType(ipcbuf_cap) == cap_null_cap) {
@@ -244,6 +274,10 @@ static BOOT_CODE bool_t try_init_kernel(
         return false;
     }
     write_it_asid_pool(it_ap_cap, it_pd_cap);
+
+#ifdef CONFIG_KERNEL_MCS
+    NODE_STATE(ksCurTime) = getCurrentTime();
+#endif
 
     /* create the idle thread */
     if (!create_idle_thread()) {
@@ -282,6 +316,9 @@ static BOOT_CODE bool_t try_init_kernel(
 
     ksNumCPUs = 1;
 
+    SMP_COND_STATEMENT(clh_lock_init());
+    SMP_COND_STATEMENT(release_secondary_cores());
+
     printf("Booting all finished, dropped to user space\n");
     return true;
 }
@@ -291,16 +328,39 @@ BOOT_CODE VISIBLE void init_kernel(
     paddr_t ui_p_reg_end,
     sword_t pv_offset,
     vptr_t  v_entry
+#ifdef ENABLE_SMP_SUPPORT
+    ,
+    word_t hart_id,
+    word_t core_id
+#endif
 )
 {
+#ifdef ENABLE_SMP_SUPPORT
+    bool_t result;
+
+    add_hart_to_core_map(hart_id, core_id);
+    if (core_id == 0) {
+        result = try_init_kernel(ui_p_reg_start,
+                                 ui_p_reg_end,
+                                 pv_offset,
+                                 v_entry);
+    } else {
+        result = try_init_kernel_secondary_core(hart_id, core_id);
+    }
+#else
     bool_t result = try_init_kernel(ui_p_reg_start,
                                     ui_p_reg_end,
                                     pv_offset,
                                     v_entry);
-
+#endif
     if (!result) {
         fail("Kernel init failed for some reason :(");
     }
+
+#ifdef CONFIG_KERNEL_MCS
+    NODE_STATE(ksCurTime) = getCurrentTime();
+    NODE_STATE(ksConsumed) = 0;
+#endif
 
     schedule();
     activateThread();

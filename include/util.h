@@ -24,6 +24,10 @@
 
 /* time constants */
 #define MS_IN_S     1000llu
+#define US_IN_MS    1000llu
+#define HZ_IN_KHZ   1000llu
+#define KHZ_IN_MHZ  1000llu
+#define HZ_IN_MHZ   1000000llu
 
 #ifndef __ASSEMBLER__
 
@@ -140,6 +144,18 @@ CONST ctzl(unsigned long x)
 #define CTZL(x) __builtin_ctzl(x)
 
 int __builtin_popcountl(unsigned long x);
+
+/** DONT_TRANSLATE */
+/** FNSPEC clzll_spec:
+  "\<forall>s. \<Gamma> \<turnstile>
+    {\<sigma>. s = \<sigma> \<and> x_' s \<noteq> 0 }
+      \<acute>ret__longlong :== PROC clzll(\<acute>x)
+    \<lbrace> \<acute>ret__longlong = of_nat (word_clz (x_' s)) \<rbrace>"
+*/
+static inline long long CONST clzll(unsigned long long x)
+{
+    return __builtin_clzll(x);
+}
 
 /** DONT_TRANSLATE */
 static inline long

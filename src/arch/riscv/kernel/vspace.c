@@ -99,9 +99,9 @@ static pte_t pte_next(word_t phys_addr, bool_t is_leaf)
 
 BOOT_CODE void map_kernel_frame(paddr_t paddr, pptr_t vaddr, vm_rights_t vm_rights)
 {
-    paddr = ROUND_DOWN(paddr, RISCV_GET_LVL_PGSIZE_BITS(1));
-    assert((paddr % RISCV_GET_LVL_PGSIZE(1)) == 0);
-    kernel_root_pageTable[RISCV_GET_PT_INDEX(vaddr, 1)] = pte_next(paddr, true);
+    paddr = ROUND_DOWN(paddr, RISCV_GET_LVL_PGSIZE_BITS(0));
+    assert((paddr % RISCV_GET_LVL_PGSIZE(0)) == 0);
+    kernel_root_pageTable[RISCV_GET_PT_INDEX(vaddr, 0)] = pte_next(paddr, true);
 }
 
 BOOT_CODE VISIBLE void map_kernel_window(void)
@@ -115,41 +115,41 @@ BOOT_CODE VISIBLE void map_kernel_window(void)
     /* first we map in memory from PADDR_BASE */
     word_t paddr = PADDR_BASE;
     while (pptr < KERNEL_BASE) {
-        assert(IS_ALIGNED(pptr, RISCV_GET_LVL_PGSIZE_BITS(1)));
-        assert(IS_ALIGNED(paddr, RISCV_GET_LVL_PGSIZE_BITS(1)));
+        assert(IS_ALIGNED(pptr, RISCV_GET_LVL_PGSIZE_BITS(0)));
+        assert(IS_ALIGNED(paddr, RISCV_GET_LVL_PGSIZE_BITS(0)));
 
-        kernel_root_pageTable[RISCV_GET_PT_INDEX(pptr, 1)] = pte_next(paddr, true);
+        kernel_root_pageTable[RISCV_GET_PT_INDEX(pptr, 0)] = pte_next(paddr, true);
 
-        pptr += RISCV_GET_LVL_PGSIZE(1);
-        paddr += RISCV_GET_LVL_PGSIZE(1);
+        pptr += RISCV_GET_LVL_PGSIZE(0);
+        paddr += RISCV_GET_LVL_PGSIZE(0);
     }
     /* now we should be mapping the 1GiB kernel base */
     assert(pptr == KERNEL_BASE);
-    paddr = ROUND_DOWN(PADDR_LOAD, RISCV_GET_LVL_PGSIZE_BITS(1));
+    paddr = ROUND_DOWN(PADDR_LOAD, RISCV_GET_LVL_PGSIZE_BITS(0));
 
 #if __riscv_xlen == 32
-    kernel_root_pageTable[RISCV_GET_PT_INDEX(pptr, 1)] = pte_next(paddr, true);
-    pptr += RISCV_GET_LVL_PGSIZE(1);
-    paddr += RISCV_GET_LVL_PGSIZE(1);
+    kernel_root_pageTable[RISCV_GET_PT_INDEX(pptr, 0)] = pte_next(paddr, true);
+    pptr += RISCV_GET_LVL_PGSIZE(0);
+    paddr += RISCV_GET_LVL_PGSIZE(0);
 #else
     word_t index = 0;
     /* The kernel image are mapped twice, locating the two indexes in the
      * root page table, pointing them to the same second level page table.
      */
-    kernel_root_pageTable[RISCV_GET_PT_INDEX(PADDR_LOAD + BASE_OFFSET, 1)] =
+    kernel_root_pageTable[RISCV_GET_PT_INDEX(PADDR_LOAD + BASE_OFFSET, 0)] =
         pte_next(kpptr_to_paddr(kernel_image_level2_pt), false);
-    kernel_root_pageTable[RISCV_GET_PT_INDEX(pptr, 1)] =
+    kernel_root_pageTable[RISCV_GET_PT_INDEX(pptr, 0)] =
         pte_next(kpptr_to_paddr(kernel_image_level2_pt), false);
-    while (pptr < KERNEL_BASE + RISCV_GET_LVL_PGSIZE(1)) {
+    while (pptr < KERNEL_BASE + RISCV_GET_LVL_PGSIZE(0)) {
         kernel_image_level2_pt[index] = pte_next(paddr, true);
         index++;
-        pptr += RISCV_GET_LVL_PGSIZE(2);
-        paddr += RISCV_GET_LVL_PGSIZE(2);
+        pptr += RISCV_GET_LVL_PGSIZE(1);
+        paddr += RISCV_GET_LVL_PGSIZE(1);
     }
 #endif
 
     /* There should be 1GiB free where we put device mapping */
-    assert(pptr == UINTPTR_MAX - RISCV_GET_LVL_PGSIZE(1) + 1);
+    assert(pptr == UINTPTR_MAX - RISCV_GET_LVL_PGSIZE(0) + 1);
     map_kernel_devices();
 }
 
@@ -242,8 +242,8 @@ static BOOT_CODE cap_t create_it_pt_cap(cap_t vspace_cap, pptr_t pptr, vptr_t vp
 BOOT_CODE word_t arch_get_n_paging(v_region_t it_v_reg)
 {
     word_t n = 0;
-    for (int i = 2; i <= CONFIG_PT_LEVELS; i++) {
-        n += get_n_paging(it_v_reg, RISCV_GET_LVL_PGSIZE_BITS(i - 1));
+    for (int i = 0; i < CONFIG_PT_LEVELS - 1; i++) {
+        n += get_n_paging(it_v_reg, RISCV_GET_LVL_PGSIZE_BITS(i));
     }
     return n;
 }
@@ -269,11 +269,11 @@ BOOT_CODE cap_t create_it_address_space(cap_t root_cnode_cap, v_region_t it_v_re
     write_slot(SLOT_PTR(pptr_of_cap(root_cnode_cap), seL4_CapInitThreadVSpace), lvl1pt_cap);
 
     /* create all n level PT caps necessary to cover userland image in 4KiB pages */
-    for (int i = 2; i <= CONFIG_PT_LEVELS; i++) {
+    for (int i = 0; i < CONFIG_PT_LEVELS - 1; i++) {
 
-        for (pt_vptr = ROUND_DOWN(it_v_reg.start, RISCV_GET_LVL_PGSIZE_BITS(i - 1));
+        for (pt_vptr = ROUND_DOWN(it_v_reg.start, RISCV_GET_LVL_PGSIZE_BITS(i));
              pt_vptr < it_v_reg.end;
-             pt_vptr += RISCV_GET_LVL_PGSIZE(i - 1)) {
+             pt_vptr += RISCV_GET_LVL_PGSIZE(i)) {
             if (!provide_cap(root_cnode_cap,
                              create_it_pt_cap(lvl1pt_cap, it_alloc_paging(), pt_vptr, IT_ASID))
                ) {
@@ -339,7 +339,7 @@ void copyGlobalMappings(pte_t *newLvl1pt)
     unsigned int i;
     pte_t *global_kernel_vspace = kernel_root_pageTable;
 
-    for (i = RISCV_GET_PT_INDEX(PPTR_BASE, 1); i < BIT(PT_INDEX_BITS); i++) {
+    for (i = RISCV_GET_PT_INDEX(PPTR_BASE, 0); i < BIT(PT_INDEX_BITS); i++) {
         newLvl1pt[i] = global_kernel_vspace[i];
     }
 }
@@ -498,7 +498,7 @@ void unmapPageTable(asid_t asid, vptr_t vptr, pte_t *target_pt)
     pte_t *ptSlot = NULL;
     pte_t *pt = find_ret.vspace_root;
 
-    for (int i = 1; i < CONFIG_PT_LEVELS && pt != target_pt; i++) {
+    for (int i = 0; i < CONFIG_PT_LEVELS - 1 && pt != target_pt; i++) {
         ptSlot = pt + RISCV_GET_PT_INDEX(vptr, i);
         if (unlikely(!isPTEPageTable(ptSlot))) {
             /* couldn't find it */
@@ -777,7 +777,7 @@ static exception_t decodeRISCVPageTableInvocation(word_t label, unsigned int len
 
     cap = cap_page_table_cap_set_capPTIsMapped(cap, 1);
     cap = cap_page_table_cap_set_capPTMappedASID(cap, asid);
-    cap = cap_page_table_cap_set_capPTMappedAddress(cap, vaddr);
+    cap = cap_page_table_cap_set_capPTMappedAddress(cap, (vaddr & ~MASK(lu_ret.ptBitsLeft)));
 
     setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
     return performPageTableInvocationMap(cap, cte, pte, ptSlot);
@@ -802,14 +802,6 @@ static exception_t decodeRISCVFrameInvocation(word_t label, unsigned int length,
 
         vm_page_size_t frameSize = cap_frame_cap_get_capFSize(cap);
         vm_rights_t capVMRights = cap_frame_cap_get_capFVMRights(cap);
-
-        /* check the frame isn't already mapped */
-        if (unlikely(cap_frame_cap_get_capFMappedASID(cap)) != asidInvalid) {
-            userError("RISCVPageMap: frame already mapped");
-            current_syscall_error.type = seL4_InvalidCapability;
-            current_syscall_error.invalidCapNumber = 0;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
 
         if (unlikely(cap_get_capType(lvl1ptCap) != cap_page_table_cap ||
                      !cap_page_table_cap_get_capPTIsMapped(lvl1ptCap))) {
@@ -858,11 +850,34 @@ static exception_t decodeRISCVFrameInvocation(word_t label, unsigned int length,
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        /* check this vaddr isn't already mapped */
-        if (unlikely(pte_ptr_get_valid(lu_ret.ptSlot))) {
-            userError("Virtual address already mapped");
-            current_syscall_error.type = seL4_DeleteFirst;
-            return EXCEPTION_SYSCALL_ERROR;
+
+        if (unlikely(cap_frame_cap_get_capFMappedASID(cap)) != asidInvalid) {
+            /* this frame is already mapped */
+            word_t mapped_vaddr = cap_frame_cap_get_capFMappedAddress(cap);
+            if (cap_page_table_cap_get_capPTMappedASID(lvl1ptCap) != asid) {
+                userError("RISCVPageMap: ASID lookup failed");
+                current_syscall_error.type = seL4_InvalidCapability;
+                current_syscall_error.invalidCapNumber = 1;
+                return EXCEPTION_SYSCALL_ERROR;
+            }
+            if (unlikely(mapped_vaddr != vaddr)) {
+                userError("RISCVPageMap: attempting to map frame into multiple addresses");
+                current_syscall_error.type = seL4_IllegalOperation;
+                return EXCEPTION_SYSCALL_ERROR;
+            }
+            if (unlikely(isPTEPageTable(lu_ret.ptSlot))) {
+                userError("RISCVPageMap: no mapping to remap.");
+                current_syscall_error.type = seL4_InvalidCapability;
+                current_syscall_error.invalidCapNumber = 0;
+                return EXCEPTION_SYSCALL_ERROR;
+            }
+        } else {
+            /* check this vaddr isn't already mapped */
+            if (unlikely(pte_ptr_get_valid(lu_ret.ptSlot))) {
+                userError("Virtual address already mapped");
+                current_syscall_error.type = seL4_DeleteFirst;
+                return EXCEPTION_SYSCALL_ERROR;
+            }
         }
 
         vm_rights_t vmRights = maskVMRights(capVMRights, rightsFromWord(w_rightsMask));
@@ -876,83 +891,6 @@ static exception_t decodeRISCVFrameInvocation(word_t label, unsigned int length,
         return performPageInvocationMapPTE(cap, cte, pte, lu_ret.ptSlot);
     }
 
-    case RISCVPageRemap: {
-        if (unlikely(length < 2 || extraCaps.excaprefs[0] == NULL)) {
-            userError("RISCVPageRemap: Truncated message.");
-            current_syscall_error.type = seL4_TruncatedMessage;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        word_t w_rightsMask = getSyscallArg(0, buffer);
-        vm_attributes_t attr = vmAttributesFromWord(getSyscallArg(1, buffer));
-        cap_t lvl1ptCap = extraCaps.excaprefs[0]->cap;
-        vm_page_size_t frameSize = cap_frame_cap_get_capFSize(cap);
-        vm_rights_t capVMRights = cap_frame_cap_get_capFVMRights(cap);
-
-        if (unlikely(cap_get_capType(lvl1ptCap) != cap_page_table_cap ||
-                     !cap_page_table_cap_get_capPTIsMapped(lvl1ptCap))) {
-            userError("RISCVPageRemap: Bad PageTable cap.");
-            current_syscall_error.type = seL4_InvalidCapability;
-            current_syscall_error.invalidCapNumber = 1;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        if (unlikely(cap_frame_cap_get_capFMappedASID(cap)) == asidInvalid) {
-            userError("RISCVPageRemap: frame is not mapped");
-            current_syscall_error.type = seL4_InvalidCapability;
-            current_syscall_error.invalidCapNumber = 0;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        asid_t mappedASID = cap_frame_cap_get_capFMappedASID(cap);
-        findVSpaceForASID_ret_t find_ret = findVSpaceForASID(mappedASID);
-        if (unlikely(find_ret.status != EXCEPTION_NONE)) {
-            userError("RISCVPageRemap: No PageTable for ASID");
-            current_syscall_error.type = seL4_FailedLookup;
-            current_syscall_error.failedLookupWasSource = false;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        pte_t *lvl1pt = PTE_PTR(cap_page_table_cap_get_capPTBasePtr(lvl1ptCap));
-        if (unlikely(find_ret.vspace_root != lvl1pt ||
-                     cap_page_table_cap_get_capPTMappedASID(lvl1ptCap) != mappedASID)) {
-            userError("RISCVPageRemap: ASID lookup failed");
-            current_syscall_error.type = seL4_InvalidCapability;
-            current_syscall_error.invalidCapNumber = 1;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        word_t vaddr = cap_frame_cap_get_capFMappedAddress(cap);
-        if (unlikely(!checkVPAlignment(frameSize, vaddr))) {
-            current_syscall_error.type = seL4_AlignmentError;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        /* Check if this page is already mapped */
-        lookupPTSlot_ret_t lu_ret = lookupPTSlot(lvl1pt, vaddr);
-
-        if (unlikely(lu_ret.ptBitsLeft != pageBitsForSize(frameSize))) {
-            userError("RISCVPageRemap: No PageTable for this page %p", (void *)vaddr);
-            current_lookup_fault = lookup_fault_missing_capability_new(lu_ret.ptBitsLeft);
-            current_syscall_error.type = seL4_FailedLookup;
-            current_syscall_error.failedLookupWasSource = false;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        if (unlikely(isPTEPageTable(lu_ret.ptSlot))) {
-            userError("RISCVPageRemap: no mapping to remap.");
-            current_syscall_error.type = seL4_InvalidCapability;
-            current_syscall_error.invalidCapNumber = 0;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        vm_rights_t vmRights = maskVMRights(capVMRights, rightsFromWord(w_rightsMask));
-        paddr_t frame_paddr = addrFromPPtr((void *) cap_frame_cap_get_capFBasePtr(cap));
-        bool_t executable = !vm_attributes_get_riscvExecuteNever(attr);
-        pte_t pte = makeUserPTE(frame_paddr, executable, vmRights);
-        setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
-        return performPageInvocationRemapPTE(pte, lu_ret.ptSlot);
-    }
     case RISCVPageUnmap: {
         setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
         return performPageInvocationUnmap(cap, cte);
@@ -1177,11 +1115,6 @@ exception_t performPageInvocationMapPTE(cap_t cap, cte_t *ctSlot,
                                         pte_t pte, pte_t *base)
 {
     ctSlot->cap = cap;
-    return updatePTE(pte, base);
-}
-
-exception_t performPageInvocationRemapPTE(pte_t pte, pte_t *base)
-{
     return updatePTE(pte, base);
 }
 

@@ -42,6 +42,42 @@ static inline void ntfn_set_active(notification_t *ntfnPtr, word_t badge)
     notification_ptr_set_ntfnMsgIdentifier(ntfnPtr, badge);
 }
 
+#ifdef CONFIG_KERNEL_MCS
+static inline void maybeDonateSchedContext(tcb_t *tcb, notification_t *ntfnPtr)
+{
+    if (tcb->tcbSchedContext == NULL) {
+        sched_context_t *sc = SC_PTR(notification_ptr_get_ntfnSchedContext(ntfnPtr));
+        if (sc != NULL && sc->scTcb == NULL) {
+            schedContext_donate(sc, tcb);
+            refill_unblock_check(sc);
+            schedContext_resume(sc);
+        }
+    }
+}
+
+static inline void maybeReturnSchedContext(notification_t *ntfnPtr, tcb_t *tcb)
+{
+
+    sched_context_t *sc = SC_PTR(notification_ptr_get_ntfnSchedContext(ntfnPtr));
+    if (sc == tcb->tcbSchedContext) {
+        tcb->tcbSchedContext = NULL;
+        sc->scTcb = NULL;
+    }
+}
+#endif
+
+#ifdef CONFIG_KERNEL_MCS
+#define MCS_DO_IF_SC(tcb, ntfnPtr, _block) \
+    maybeDonateSchedContext(tcb, ntfnPtr); \
+    if (isSchedulable(tcb)) { \
+        _block \
+    }
+#else
+#define MCS_DO_IF_SC(tcb, ntfnPtr, _block) \
+    { \
+        _block \
+    }
+#endif
 
 void sendSignal(notification_t *ntfnPtr, word_t badge)
 {
@@ -55,7 +91,9 @@ void sendSignal(notification_t *ntfnPtr, word_t badge)
                 cancelIPC(tcb);
                 setThreadState(tcb, ThreadState_Running);
                 setRegister(tcb, badgeRegister, badge);
-                possibleSwitchTo(tcb);
+                MCS_DO_IF_SC(tcb, ntfnPtr, {
+                    possibleSwitchTo(tcb);
+                })
 #ifdef CONFIG_VTX
             } else if (thread_state_ptr_get_tsType(&tcb->tcbState) == ThreadState_RunningVM) {
 #ifdef ENABLE_SMP_SUPPORT
@@ -68,7 +106,9 @@ void sendSignal(notification_t *ntfnPtr, word_t badge)
                     setThreadState(tcb, ThreadState_Running);
                     setRegister(tcb, badgeRegister, badge);
                     Arch_leaveVMAsyncTransfer(tcb);
-                    possibleSwitchTo(tcb);
+                    MCS_DO_IF_SC(tcb, ntfnPtr, {
+                        possibleSwitchTo(tcb);
+                    })
                 }
 #endif /* CONFIG_VTX */
             } else {
@@ -107,7 +147,9 @@ void sendSignal(notification_t *ntfnPtr, word_t badge)
 
         setThreadState(dest, ThreadState_Running);
         setRegister(dest, badgeRegister, badge);
-        possibleSwitchTo(dest);
+        MCS_DO_IF_SC(dest, ntfnPtr, {
+            possibleSwitchTo(dest);
+        })
         break;
     }
 
@@ -140,6 +182,9 @@ void receiveSignal(tcb_t *thread, cap_t cap, bool_t isBlocking)
                                         ThreadState_BlockedOnNotification);
             thread_state_ptr_set_blockingObject(&thread->tcbState,
                                                 NTFN_REF(ntfnPtr));
+#ifdef CONFIG_KERNEL_MCS
+            maybeReturnSchedContext(ntfnPtr, thread);
+#endif
             scheduleTCB(thread);
 
             /* Enqueue TCB */
@@ -160,6 +205,9 @@ void receiveSignal(tcb_t *thread, cap_t cap, bool_t isBlocking)
             thread, badgeRegister,
             notification_ptr_get_ntfnMsgIdentifier(ntfnPtr));
         notification_ptr_set_state(ntfnPtr, NtfnState_Idle);
+#ifdef CONFIG_KERNEL_MCS
+        maybeDonateSchedContext(thread, ntfnPtr);
+#endif
         break;
     }
 }
@@ -176,7 +224,11 @@ void cancelAllSignals(notification_t *ntfnPtr)
         /* Set all waiting threads to Restart */
         for (; thread; thread = thread->tcbEPNext) {
             setThreadState(thread, ThreadState_Restart);
+#ifdef CONFIG_KERNEL_MCS
+            possibleSwitchTo(thread);
+#else
             SCHED_ENQUEUE(thread);
+#endif
         }
         rescheduleRequired();
     }
@@ -248,3 +300,12 @@ void bindNotification(tcb_t *tcb, notification_t *ntfnPtr)
     tcb->tcbBoundNotification = ntfnPtr;
 }
 
+#ifdef CONFIG_KERNEL_MCS
+void reorderNTFN(notification_t *ntfnPtr, tcb_t *thread)
+{
+    tcb_queue_t queue = ntfn_ptr_get_queue(ntfnPtr);
+    queue = tcbEPDequeue(thread, queue);
+    queue = tcbEPAppend(thread, queue);
+    ntfn_ptr_set_queue(ntfnPtr, queue);
+}
+#endif

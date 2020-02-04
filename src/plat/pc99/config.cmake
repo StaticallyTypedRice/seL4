@@ -20,28 +20,10 @@ if(KernelPlatPC99)
     elseif("${KernelSel4Arch}" STREQUAL x86_64)
         declare_seL4_arch(x86_64)
     else()
-        message(STATUS "Selected platform pc99 supports multiple architectures but none were given")
-        message(STATUS "  Defaulting to x86_64")
-        declare_seL4_arch(x86_64)
+        fallback_declare_seL4_arch_default(x86_64)
     endif()
 
 endif()
-
-config_option(
-    KernelIOMMU IOMMU "IOMMU support for VT-d enabled chipset"
-    DEFAULT ON
-    DEPENDS "KernelPlatPC99; NOT KernelVerificationBuild"
-    DEFAULT_DISABLED OFF
-)
-
-config_string(
-    KernelMaxRMRREntries MAX_RMRR_ENTRIES
-    "Setsthe maximum number of Reserved Memory Region Reporting structures we support \
-    recording from the ACPI tables"
-    DEFAULT 32
-    DEPENDS "KernelIOMMU" DEFAULT_DISABLED 1
-    UNQUOTE
-)
 
 add_sources(
     DEP "KernelPlatPC99"

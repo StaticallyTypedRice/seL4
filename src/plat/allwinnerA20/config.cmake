@@ -12,19 +12,25 @@
 
 cmake_minimum_required(VERSION 3.7.2)
 
-declare_platform(allwinnera20 KernelPlatformAllwinnerA20 PLAT_ALLWINNERA20 KernelSel4ArchAarch32)
+declare_platform(allwinnerA20 KernelPlatformAllwinnerA20 PLAT_ALLWINNERA20 KernelSel4ArchAarch32)
 
 if(KernelPlatformAllwinnerA20)
     declare_seL4_arch(aarch32)
     set(KernelArmCortexA7 ON)
     set(KernelArchArmV7a ON)
-    config_set(KernelARMPlatform ARM_PLAT allwinnera20)
-    list(APPEND KernelDTSList "tools/dts/allwinnera20.dts")
-    list(APPEND KernelDTSList "src/plat/allwinnerA20/overlay-allwinnera20.dts")
+    config_set(KernelARMPlatform ARM_PLAT allwinnerA20)
+
+    # MCS is not supported on allwinnerA20.
+    # It requires a timer driver that implements the tickless programming requirements.
+    set(KernelPlatformSupportsMCS OFF)
+
+    list(APPEND KernelDTSList "tools/dts/allwinnerA20.dts")
+    list(APPEND KernelDTSList "src/plat/allwinnerA20/overlay-allwinnerA20.dts")
 
     declare_default_headers(
         TIMER_FREQUENCY 24000000llu
         MAX_IRQ 122
+        NUM_PPI 32
         TIMER drivers/timer/allwinner.h
         INTERRUPT_CONTROLLER arch/machine/gic_v2.h
     )

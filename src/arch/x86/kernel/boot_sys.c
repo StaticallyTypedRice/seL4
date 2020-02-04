@@ -210,10 +210,15 @@ static BOOT_CODE bool_t add_mem_p_regs(p_region_t reg)
         printf("Dropping memory region 0x%lx-0x%lx, try increasing MAX_NUM_FREEMEM_REG\n", reg.start, reg.end);
         return false;
     }
+    if (reg.end > PADDR_TOP) {
+        assert(reg.start <= PADDR_TOP);
+        /* Clamp a region to the top of the kernel window if it extends beyond */
+        reg.end = PADDR_TOP;
+    }
     printf("Adding physical memory region 0x%lx-0x%lx\n", reg.start, reg.end);
     boot_state.mem_p_regs.list[boot_state.mem_p_regs.count] = reg;
     boot_state.mem_p_regs.count++;
-    return add_allocated_p_region(reg);
+    return reserve_region(reg);
 }
 
 /*
@@ -557,7 +562,6 @@ static BOOT_CODE bool_t try_boot_sys_mbi1(
      * include all the physical memory in the kernel window, but also includes any
      * important or kernel devices. */
     boot_state.mem_p_regs.count = 0;
-    init_allocated_p_regions();
     if (mbi->part1.flags & MULTIBOOT_INFO_MMAP_FLAG) {
         if (!parse_mem_map(mbi->part2.mmap_length, mbi->part2.mmap_addr)) {
             return false;
@@ -621,7 +625,6 @@ static BOOT_CODE bool_t try_boot_sys_mbi2(
      * include all the physical memory in the kernel window, but also includes any
      * important or kernel devices. */
     boot_state.mem_p_regs.count = 0;
-    init_allocated_p_regions();
     boot_state.mb_mmap_info.mmap_length = 0;
     boot_state.vbe_info.vbeMode = -1;
 
@@ -727,6 +730,11 @@ BOOT_CODE VISIBLE void boot_sys(
 
     ARCH_NODE_STATE(x86KScurInterrupt) = int_invalid;
     ARCH_NODE_STATE(x86KSPendingInterrupt) = int_invalid;
+
+#ifdef CONFIG_KERNEL_MCS
+    NODE_STATE(ksCurTime) = getCurrentTime();
+    NODE_STATE(ksConsumed) = 0;
+#endif
 
     schedule();
     activateThread();

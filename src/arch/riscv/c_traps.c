@@ -32,10 +32,15 @@
 void VISIBLE NORETURN restore_user_context(void)
 {
     word_t cur_thread_reg = (word_t) NODE_STATE(ksCurThread)->tcbArch.tcbContext.registers;
-
     c_exit_hook();
-
     NODE_UNLOCK_IF_HELD;
+
+#ifdef ENABLE_SMP_SUPPORT
+    word_t sp;
+    asm volatile("csrr %0, sscratch" : "=r"(sp));
+    sp -= sizeof(word_t);
+    *((word_t *)sp) = cur_thread_reg;
+#endif
 
     asm volatile(
         "mv t0, %[cur_thread]       \n"
@@ -76,10 +81,10 @@ void VISIBLE NORETURN restore_user_context(void)
         /* get sepc */
         LOAD_S "  t1, (34*%[REGSIZE])(t0)\n"
         "csrw sepc, t1  \n"
-
+#ifndef ENABLE_SMP_SUPPORT
         /* Write back sscratch with cur_thread_reg to get it back on the next trap entry */
         "csrw sscratch, t0         \n"
-
+#endif
         LOAD_S "  t1, (32*%[REGSIZE])(t0) \n"
         "csrw sstatus, t1\n"
 
@@ -97,7 +102,7 @@ void VISIBLE NORETURN restore_user_context(void)
 
 void VISIBLE NORETURN c_handle_interrupt(void)
 {
-    NODE_LOCK_IRQ;
+    NODE_LOCK_IRQ_IF(getActiveIRQ() != irq_remote_call_ipi);
 
     c_entry_hook();
 
@@ -146,7 +151,7 @@ void NORETURN slowpath(syscall_t syscall)
 }
 
 void VISIBLE NORETURN c_handle_syscall(word_t cptr, word_t msgInfo, word_t unused1, word_t unused2, word_t unused3,
-                                       word_t unused4, word_t unused5, syscall_t syscall)
+                                       word_t unused4, word_t reply, syscall_t syscall)
 {
     NODE_LOCK_SYS;
 
@@ -157,7 +162,11 @@ void VISIBLE NORETURN c_handle_syscall(word_t cptr, word_t msgInfo, word_t unuse
         fastpath_call(cptr, msgInfo);
         UNREACHABLE();
     } else if (syscall == (syscall_t)SysReplyRecv) {
+#ifdef CONFIG_KERNEL_MCS
+        fastpath_reply_recv(cptr, msgInfo, reply);
+#else
         fastpath_reply_recv(cptr, msgInfo);
+#endif
         UNREACHABLE();
     }
 #endif /* CONFIG_FASTPATH */

@@ -51,13 +51,13 @@
 #define ESR_EC_CPACR        0x18        /* Trap access to CPACR                        */
 #define ESR_EC(x)           (((x) & 0xfc000000) >> 26)
 
-#define VTCR_EL2_T0SZ(x)    (x)
-#define VTCR_EL2_SL0(x)     ((x) << 6)
-#define VTCR_EL2_IRGN0(x)   ((x) << 8)
-#define VTCR_EL2_ORGN0(x)   ((x) << 10)
-#define VTCR_EL2_SH0(x)     ((x) << 12)
-#define VTCR_EL2_TG0(x)     ((x) << 14)
-#define VTCR_EL2_PS(x)      ((x) << 16)
+#define VTCR_EL2_T0SZ(x)    ((x) & 0x3f)
+#define VTCR_EL2_SL0(x)     (((x) & 0x3) << 6)
+#define VTCR_EL2_IRGN0(x)   (((x) & 0x3) << 8)
+#define VTCR_EL2_ORGN0(x)   (((x) & 0x3) << 10)
+#define VTCR_EL2_SH0(x)     (((x) & 0x3) << 12)
+#define VTCR_EL2_TG0(x)     (((x) & 0x3) << 14)
+#define VTCR_EL2_PS(x)      (((x) & 0x7) << 16)
 
 /* Physical address size */
 #define PS_4G               0
@@ -71,6 +71,9 @@
 #define TG0_4K              0
 #define TG0_64K             1
 #define TG0_16K             2
+
+#define ID_AA64MMFR0_EL1_PARANGE(x) ((x) & 0xf)
+#define ID_AA64MMFR0_TGRAN4(x)      (((x) >> 28u) & 0xf)
 
 /* Shareability attributes */
 #define SH0_NONE            0
@@ -102,9 +105,7 @@
 #define REG_FAR_EL1         "far_el1"
 #define REG_ISR_EL1         "isr_el1"
 #define REG_VBAR_EL1        "vbar_el1"
-#define REG_TPIDR_EL0       "tpidr_el0"
 #define REG_TPIDR_EL1       "tpidr_el1"
-#define REG_TPIDRRO_EL0     "tpidrro_el0"
 #define REG_SP_EL1          "sp_el1"
 #define REG_ELR_EL1         "elr_el1"
 #define REG_SPSR_EL1        "spsr_el1"
@@ -113,6 +114,7 @@
 #define REG_CNTV_CTL_EL0    "cntv_ctl_el0"
 #define REG_HCR_EL2         "hcr_el2"
 #define REG_VTCR_EL2        "vtcr_el2"
+#define REG_ID_AA64MMFR0_EL1 "id_aa64mmfr0_el1"
 
 /* for EL1 SCTLR */
 static inline word_t getSCTLR(void)
@@ -254,7 +256,7 @@ static inline word_t readFAR(void)
 
 static inline void writeFAR(word_t reg)
 {
-    MSR(REG_FAR_EL1, (uint32_t)reg);
+    MSR(REG_FAR_EL1, reg);
 }
 
 /* ISR is read-only */
@@ -298,7 +300,7 @@ static inline word_t readELR_EL1(void)
 
 static inline void writeELR_EL1(word_t reg)
 {
-    MRS(REG_ELR_EL1, reg);
+    MSR(REG_ELR_EL1, reg);
 }
 
 static inline word_t readSPSR_EL1(void)
@@ -385,8 +387,6 @@ static word_t vcpu_hw_read_reg(word_t reg_index)
         return readVBAR();
     case seL4_VCPUReg_TPIDR_EL1:
         return readTPIDR_EL1();
-    case seL4_VCPUReg_TPIDRRO_EL0:
-        return readTPIDRRO_EL0();
     case seL4_VCPUReg_CNTV_TVAL:
         return readCNTV_TVAL_EL0();
     case seL4_VCPUReg_CNTV_CTL:
@@ -442,8 +442,6 @@ static void vcpu_hw_write_reg(word_t reg_index, word_t reg)
         return writeVBAR(reg);
     case seL4_VCPUReg_TPIDR_EL1:
         return writeTPIDR_EL1(reg);
-    case seL4_VCPUReg_TPIDRRO_EL0:
-        return writeTPIDRRO_EL0(reg);
     case seL4_VCPUReg_CNTV_TVAL:
         return writeCNTV_TVAL_EL0(reg);
     case seL4_VCPUReg_CNTV_CTL:
@@ -465,14 +463,37 @@ static void vcpu_hw_write_reg(word_t reg_index, word_t reg)
 
 static inline void vcpu_init_vtcr(void)
 {
+
+    /* check that the processor supports the configuration */
+    uint32_t val;
+    MRS(REG_ID_AA64MMFR0_EL1, val);
+    uint32_t pa_range = ID_AA64MMFR0_EL1_PARANGE(val);
+    if (config_set(CONFIG_ARM_PA_SIZE_BITS_40) && pa_range < PS_1T) {
+        fail("Processor does not support a 40 bit PA");
+    }
+    if (config_set(CONFIG_ARM_PA_SIZE_BITS_44) && pa_range < PS_16T) {
+        fail("Processor does not support a 44 bit PA");
+    }
+    uint32_t granule = ID_AA64MMFR0_TGRAN4(val);
+    if (granule) {
+        fail("Processor does not support 4KB");
+    }
+
     /* Set up the stage-2 translation control register for cores supporting 44-bit PA */
-    uint32_t vtcr_el2 = VTCR_EL2_T0SZ(20);                   // 44-bit input IPA
+    uint32_t vtcr_el2;
+#ifdef CONFIG_ARM_PA_SIZE_BITS_40
+    vtcr_el2 = VTCR_EL2_T0SZ(24);                            // 40-bit input IPA
+    vtcr_el2 |= VTCR_EL2_PS(PS_1T);                          // 40-bit PA size
+    vtcr_el2 |= VTCR_EL2_SL0(SL0_4K_L1);                     // 4KiB, start at level 1
+#else
+    vtcr_el2 = VTCR_EL2_T0SZ(20);                            // 44-bit input IPA
+    vtcr_el2 |= VTCR_EL2_PS(PS_16T);                         // 44-bit PA size
     vtcr_el2 |= VTCR_EL2_SL0(SL0_4K_L0);                     // 4KiB, start at level 0
+#endif
     vtcr_el2 |= VTCR_EL2_IRGN0(NORMAL_WB_WA_CACHEABLE);      // inner write-back, read/write allocate
     vtcr_el2 |= VTCR_EL2_ORGN0(NORMAL_WB_WA_CACHEABLE);      // outer write-back, read/write allocate
     vtcr_el2 |= VTCR_EL2_SH0(SH0_INNER);                     // inner shareable
     vtcr_el2 |= VTCR_EL2_TG0(TG0_4K);                        // 4KiB page size
-    vtcr_el2 |= VTCR_EL2_PS(PS_16T);                         // 44-bit PA size
     vtcr_el2 |= BIT(31);                                     // reserved as 1
 
     MSR(REG_VTCR_EL2, vtcr_el2);
@@ -505,7 +526,6 @@ static inline void armv_vcpu_enable(vcpu_t *vcpu)
 #ifdef CONFIG_HAVE_FPU
     vcpu_hw_write_reg(seL4_VCPUReg_CPACR, vcpu->regs[seL4_VCPUReg_CPACR]);
 #endif
-    vcpu_hw_write_reg(seL4_VCPUReg_TPIDRRO_EL0, vcpu->regs[seL4_VCPUReg_TPIDRRO_EL0]);
 }
 
 static inline void armv_vcpu_disable(vcpu_t *vcpu)
@@ -520,7 +540,6 @@ static inline void armv_vcpu_disable(vcpu_t *vcpu)
 #ifdef CONFIG_HAVE_FPU
         vcpu->regs[seL4_VCPUReg_CPACR] = vcpu_hw_read_reg(seL4_VCPUReg_CPACR);
 #endif
-        vcpu->regs[seL4_VCPUReg_TPIDRRO_EL0] = vcpu_hw_read_reg(seL4_VCPUReg_TPIDRRO_EL0);
         isb();
     }
     /* Turn off the VGIC */

@@ -31,12 +31,16 @@
 #include <arch/types.h>
 #include <sel4/sel4_arch/constants.h>
 
+/* The size is for HiFive Unleashed */
+#define L1_CACHE_LINE_SIZE_BITS     6
+#define L1_CACHE_LINE_SIZE          BIT(L1_CACHE_LINE_SIZE_BITS)
+
 /* The highest valid physical address that can be indexed in the kernel window */
 #define PADDR_TOP (KERNEL_BASE - PPTR_BASE + PADDR_BASE)
 /* A contiguous region of physical address space at PADDR_LOAD is mapped
- * to KERNEL_ELF_BASE, and the size of this region is KDEV_PPTR-KERNEL_ELF_BASE.
+ * to KERNEL_ELF_BASE, and the size of this region is KDEV_BASE-KERNEL_ELF_BASE.
  * PADDR_HIGH_TOP is the end of this physical address region. */
-#define PADDR_HIGH_TOP (KDEV_PPTR - KERNEL_ELF_BASE + PADDR_LOAD)
+#define PADDR_HIGH_TOP (KDEV_BASE - KERNEL_ELF_BASE + PADDR_LOAD)
 
 /* Translates from a physical address and a value in the kernel image */
 #define KERNEL_BASE_OFFSET (KERNEL_ELF_BASE - PADDR_LOAD)
@@ -50,14 +54,16 @@
 
 #define PAGE_BITS seL4_PageBits
 
+#define MODE_RESERVED 0
+
 /* MMU RISC-V related definitions. See RISC-V manual priv-1.10 */
 
 /* Extract the n-level PT index from a virtual address. This works for any
  * configured RISC-V system with CONFIG_PT_LEVEL (which can be 2 on Sv32,
  * 3 on Sv38, or 4 on Sv48)
  */
-#define RISCV_GET_PT_INDEX(addr, n)  (((addr) >> (((PT_INDEX_BITS) * ((CONFIG_PT_LEVELS) - (n))) + seL4_PageBits)) & MASK(PT_INDEX_BITS))
-#define RISCV_GET_LVL_PGSIZE_BITS(n) (((PT_INDEX_BITS) * (CONFIG_PT_LEVELS - (n))) + seL4_PageBits)
+#define RISCV_GET_PT_INDEX(addr, n)  (((addr) >> (((PT_INDEX_BITS) * (((CONFIG_PT_LEVELS) - 1) - (n))) + seL4_PageBits)) & MASK(PT_INDEX_BITS))
+#define RISCV_GET_LVL_PGSIZE_BITS(n) (((PT_INDEX_BITS) * (((CONFIG_PT_LEVELS) - 1) - (n))) + seL4_PageBits)
 #define RISCV_GET_LVL_PGSIZE(n)      BIT(RISCV_GET_LVL_PGSIZE_BITS((n)))
 /*
  * These values are defined in RISC-V priv-1.10 manual, they represent the
@@ -126,5 +132,10 @@ static inline unsigned int CONST pageBitsForSize(vm_page_size_t pagesize)
 
 #define LOAD_S STRINGIFY(LOAD)
 #define STORE_S STRINGIFY(STORE)
+
+#define IPI_MEM_BARRIER \
+    do { \
+        asm volatile("fence rw,rw" ::: "memory"); \
+    } while (0)
 
 #endif /* !__ARCH_MACHINE_HARDWARE_H */

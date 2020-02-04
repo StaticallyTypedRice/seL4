@@ -25,8 +25,13 @@ if(KernelPlatformExynos4)
     declare_default_headers(
         TIMER_FREQUENCY 24000000llu
         MAX_IRQ 159
+        NUM_PPI 32
         TIMER drivers/timer/exynos4412-mct.h
         INTERRUPT_CONTROLLER arch/machine/gic_v2.h
+        KERNEL_WCET 10u
+        CLK_MAGIC 2863311531llu
+        CLK_SHIFT 36u
+        TIMER_PRECISION 0u
     )
 endif()
 

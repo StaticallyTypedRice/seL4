@@ -96,7 +96,6 @@ static inline void access_fpexc(vcpu_t *vcpu, bool_t write)
 static void vcpu_enable(vcpu_t *vcpu)
 {
 #ifdef CONFIG_ARCH_AARCH64
-    vcpu_restore_reg(vcpu, seL4_VCPUReg_TPIDRRO_EL0);
     armv_vcpu_enable(vcpu);
 #else
     vcpu_restore_reg(vcpu, seL4_VCPUReg_SCTLR);
@@ -177,10 +176,6 @@ static void vcpu_enable(vcpu_t *vcpu)
 static void vcpu_disable(vcpu_t *vcpu)
 {
 #ifdef CONFIG_ARCH_AARCH64
-    if (likely(vcpu)) {
-        vcpu_save_reg(vcpu, seL4_VCPUReg_TPIDRRO_EL0);
-        vcpu_hw_write_reg(seL4_VCPUReg_TPIDRRO_EL0, 0);
-    }
     armv_vcpu_disable(vcpu);
 #else
     uint32_t hcr;
@@ -742,21 +737,25 @@ exception_t invokeVCPUSetTCB(vcpu_t *vcpu, tcb_t *tcb)
 
 void handleVCPUFault(word_t hsr)
 {
+    MCS_DO_IF_BUDGET({
 #ifdef CONFIG_ARCH_AARCH64
-    if (armv_handleVCPUFault(hsr)) {
-        return;
-    }
+        if (armv_handleVCPUFault(hsr))
+        {
+            return;
+        }
 #endif
 #ifdef CONFIG_HAVE_FPU
-    if (hsr == HSR_FPU_FAULT || hsr == HSR_TASE_FAULT) {
-        assert(!isFpuEnable());
-        handleFPUFault();
-        setNextPC(NODE_STATE(ksCurThread), getRestartPC(NODE_STATE(ksCurThread)));
-        return;
-    }
+        if (hsr == HSR_FPU_FAULT || hsr == HSR_TASE_FAULT)
+        {
+            assert(!isFpuEnable());
+            handleFPUFault();
+            setNextPC(NODE_STATE(ksCurThread), getRestartPC(NODE_STATE(ksCurThread)));
+            return;
+        }
 #endif
-    current_fault = seL4_Fault_VCPUFault_new(hsr);
-    handleFault(NODE_STATE(ksCurThread));
+        current_fault = seL4_Fault_VCPUFault_new(hsr);
+        handleFault(NODE_STATE(ksCurThread));
+    })
     schedule();
     activateThread();
 }

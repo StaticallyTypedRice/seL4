@@ -21,8 +21,9 @@ if(KernelPlatformHifive)
     config_set(KernelRiscVPlatform RISCV_PLAT "hifive")
     config_set(KernelPlatformFirstHartID FIRST_HART_ID 1)
     list(APPEND KernelDTSList "tools/dts/hifive.dts")
+    list(APPEND KernelDTSList "src/plat/hifive/overlay-hifive.dts")
     declare_default_headers(
-        TIMER_FREQUENCY 10000000llu PLIC_MAX_NUM_INT 53
+        TIMER_FREQUENCY 1000000llu PLIC_MAX_NUM_INT 53
         INTERRUPT_CONTROLLER drivers/irq/hifive.h
     )
 else()

@@ -20,11 +20,7 @@ if(KernelPlatformHikey)
     elseif("${KernelSel4Arch}" STREQUAL aarch64)
         declare_seL4_arch(aarch64)
     else()
-        message(
-            STATUS "Selected platform hikey supports multiple architectures but none were given"
-        )
-        message(STATUS "  Defaulting to aarch32")
-        declare_seL4_arch(aarch32)
+        fallback_declare_seL4_arch_default(aarch32)
     endif()
     set(KernelArmCortexA53 ON)
     set(KernelArchArmV8a ON)
@@ -37,6 +33,9 @@ if(KernelPlatformHikey)
         MAX_IRQ 159
         TIMER drivers/timer/arm_generic.h
         INTERRUPT_CONTROLLER arch/machine/gic_v2.h
+        CLK_MAGIC 458129845llu
+        CLK_SHIFT 39u
+        KERNEL_WCET 10u
     )
 endif()
 

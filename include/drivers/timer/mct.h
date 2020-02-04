@@ -119,7 +119,7 @@ extern timer_t *mct;
 
 static inline void mct_reset(void)
 {
-    mct->global.int_stat = GINT_COMP0_IRQ;
+    mct->global.int_stat = mct->global.int_stat;
 }
 
 static inline void mct_clear_write_status(void)
@@ -128,4 +128,6 @@ static inline void mct_clear_write_status(void)
     mct->global.wstat = mct->global.wstat;
     mct->global.cnt_wstat = mct->global.cnt_wstat;
 }
+
+
 #endif /* __DRIVERS_TIMER_MCT_H */

@@ -16,21 +16,23 @@ declare_platform(tx2 KernelPlatformTx2 PLAT_TX2 KernelSel4ArchAarch64)
 
 if(KernelPlatformTx2)
     declare_seL4_arch(aarch64)
+    # Note: If we enable the Denver 2 cores, which are 40-bit PA,
+    # the 44-bit PA for Cortex-A57 cores would need to be downgraded to 40bit.
     set(KernelArmCortexA57 ON)
     set(KernelArchArmV8a ON)
     config_set(KernelARMPlatform ARM_PLAT tx2)
     config_set(KernelArmMach MACH "nvidia")
-    # Note that the 44-bit PA is only for Cortex-A57 cores.
-    # If we enable the Denver 2 cores, which support 40-bit PA,
-    # KernelArmPASizeBits40 should be enabled instead.
-    set(KernelArmPASizeBits44 ON)
     list(APPEND KernelDTSList "tools/dts/tx2.dts")
     list(APPEND KernelDTSList "src/plat/tx2/overlay-tx2.dts")
     declare_default_headers(
         TIMER_FREQUENCY 31250000llu
         MAX_IRQ 383
         INTERRUPT_CONTROLLER arch/machine/gic_v2.h
+        NUM_PPI 32
         TIMER drivers/timer/arm_generic.h
+        CLK_SHIFT 57u
+        CLK_MAGIC 4611686019u
+        KERNEL_WCET 10u
     )
 endif()
 

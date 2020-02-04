@@ -15,11 +15,16 @@
  * Copyright 2016, 2017 Hesham Almatary, Data61/CSIRO <hesham.almatary@data61.csiro.au>
  * Copyright 2015, 2016 Hesham Almatary <heshamelmatary@gmail.com>
  */
+#include <config.h>
 #include <types.h>
 #include <machine/registerset.h>
 #include <machine/timer.h>
 #include <arch/machine.h>
+#include <arch/smp/ipi.h>
 
+
+#define SIPI_IP   1
+#define SIPI_IE   1
 #define STIMER_IP 5
 #define STIMER_IE 5
 #define STIMER_CAUSE 5
@@ -27,7 +32,9 @@
 #define SEXTERNAL_IE 9
 #define SEXTERNAL_CAUSE 9
 
+#ifndef CONFIG_KERNEL_MCS
 #define RESET_CYCLES ((TIMER_CLOCK_HZ / MS_IN_S) * CONFIG_TIMER_TICK_MS)
+#endif /* !CONFIG_KERNEL_MCS */
 
 #define IS_IRQ_VALID(X) (((X)) <= maxIRQ && (X)!= irqInvalid)
 
@@ -51,29 +58,6 @@ BOOT_CODE p_region_t *get_avail_p_regs(void)
     return (p_region_t *) avail_p_regs;
 }
 
-BOOT_CODE int get_num_dev_p_regs(void)
-{
-    if (dev_p_regs != NULL) {
-        return (sizeof(dev_p_regs) / sizeof(p_region_t));
-    } else {
-        return 0;
-    }
-}
-
-BOOT_CODE p_region_t get_dev_p_reg(word_t i)
-{
-    /* We need this if guard as some RISC-V configurations don't declare any
-     * device regions and some compilers complain about indexing an empty array
-     * due to not being able to infer that get_dev_p_reg is only called if
-     * dev_p_regs contains entries.
-     */
-    if (get_num_dev_p_regs() == 0) {
-        printf("%s: No devices present.\n", __func__);
-        halt();
-    }
-    return dev_p_regs[i];
-}
-
 BOOT_CODE void map_kernel_devices(void)
 {
     if (kernel_devices == NULL) {
@@ -81,8 +65,15 @@ BOOT_CODE void map_kernel_devices(void)
     }
 
     for (int i = 0; i < (sizeof(kernel_devices) / sizeof(kernel_frame_t)); i++) {
-        map_kernel_frame(kernel_devices[i].paddr, KDEV_PPTR,
+        map_kernel_frame(kernel_devices[i].paddr, KDEV_BASE,
                          VMKernelOnly);
+        if (!kernel_devices[i].userAvailable) {
+            p_region_t reg = {
+                .start = kernel_devices[i].paddr,
+                .end = kernel_devices[i].paddr + (1 << PAGE_BITS),
+            };
+            reserve_region(reg);
+        }
     }
 }
 
@@ -118,19 +109,22 @@ static irq_t getNewActiveIRQ(void)
 {
 
     uint64_t sip = read_sip();
-
-    if (sip & BIT(STIMER_IP)) {
-        // Supervisor timer interrupt
-        return INTERRUPT_CORE_TIMER;
-    } else if (BIT(SEXTERNAL_IP)) {
-        /* External IRQ */
+    /* Interrupt priority (high to low ): external -> software -> timer */
+    if (sip & BIT(SEXTERNAL_IP)) {
         return plic_get_claim();
-    } else {
-        return irqInvalid;
+#ifdef ENABLE_SMP_SUPPORT
+    } else if (sip & BIT(SIPI_IP)) {
+        sbi_clear_ipi();
+        return ipi_get_irq();
+#endif
+    } else if (sip & BIT(STIMER_IP)) {
+        return INTERRUPT_CORE_TIMER;
     }
+
+    return irqInvalid;
 }
 
-static uint32_t active_irq = irqInvalid;
+static uint32_t active_irq[CONFIG_MAX_NUM_NODES] = { irqInvalid };
 
 
 /**
@@ -149,12 +143,12 @@ irq_t getActiveIRQ(void)
 {
 
     uint32_t irq;
-    if (!IS_IRQ_VALID(active_irq)) {
-        active_irq = getNewActiveIRQ();
+    if (!IS_IRQ_VALID(active_irq[CURRENT_CPU_INDEX()])) {
+        active_irq[CURRENT_CPU_INDEX()] = getNewActiveIRQ();
     }
 
-    if (IS_IRQ_VALID(active_irq)) {
-        irq = active_irq;
+    if (IS_IRQ_VALID(active_irq[CURRENT_CPU_INDEX()])) {
+        irq = active_irq[CURRENT_CPU_INDEX()];
     } else {
         irq = irqInvalid;
     }
@@ -213,6 +207,10 @@ void maskInterrupt(bool_t disable, interrupt_t irq)
         } else {
             set_sie_mask(BIT(STIMER_IE));
         }
+#ifdef ENABLE_SMP_SUPPORT
+    } else if (irq == irq_reschedule_ipi || irq == irq_remote_call_ipi) {
+        return;
+#endif
     } else {
         plic_mask_irq(disable, irq);
     }
@@ -231,49 +229,35 @@ void maskInterrupt(bool_t disable, interrupt_t irq)
 void ackInterrupt(irq_t irq)
 {
     assert(IS_IRQ_VALID(irq));
-    active_irq = irqInvalid;
+    active_irq[CURRENT_CPU_INDEX()] = irqInvalid;
 
     if (irq == INTERRUPT_CORE_TIMER) {
         /* Reprogramming the timer has cleared the interrupt. */
         return;
     }
-}
-
-static inline uint64_t get_cycles(void)
-#if __riscv_xlen == 32
-{
-    uint32_t nH, nL;
-    asm volatile(
-        "rdtimeh %0\n"
-        "rdtime  %1\n"
-        : "=r"(nH), "=r"(nL));
-    return ((uint64_t)((uint64_t) nH << 32)) | (nL);
-}
-#else
-{
-    uint64_t n;
-    asm volatile(
-        "rdtime %0"
-        : "=r"(n));
-    return n;
-}
+#ifdef ENABLE_SMP_SUPPORT
+    if (irq == irq_reschedule_ipi || irq == irq_remote_call_ipi) {
+        ipi_clear_irq(irq);
+    }
 #endif
+}
 
 static inline int read_current_timer(unsigned long *timer_val)
 {
-    *timer_val = get_cycles();
+    *timer_val = riscv_read_time();
     return 0;
 }
 
+#ifndef CONFIG_KERNEL_MCS
 void resetTimer(void)
 {
     uint64_t target;
     // repeatedly try and set the timer in a loop as otherwise there is a race and we
     // may set a timeout in the past, resulting in it never getting triggered
     do {
-        target = get_cycles() + RESET_CYCLES;
+        target = riscv_read_time() + RESET_CYCLES;
         sbi_set_timer(target);
-    } while (get_cycles() > target);
+    } while (riscv_read_time() > target);
 }
 
 /**
@@ -281,8 +265,9 @@ void resetTimer(void)
  */
 BOOT_CODE void initTimer(void)
 {
-    sbi_set_timer(get_cycles() + RESET_CYCLES);
+    sbi_set_timer(riscv_read_time() + RESET_CYCLES);
 }
+#endif /* !CONFIG_KERNEL_MCS */
 
 void plat_cleanL2Range(paddr_t start, paddr_t end)
 {
@@ -299,16 +284,36 @@ BOOT_CODE void initL2Cache(void)
 {
 }
 
+BOOT_CODE void initLocalIRQController(void)
+{
+    printf("Init local IRQ\n");
+
+#ifdef CONFIG_PLAT_HIFIVE
+    /* Init per-hart PLIC */
+    plic_init_hart();
+#endif
+
+    word_t sie = 0;
+    sie |= BIT(SEXTERNAL_IE);
+    sie |= BIT(STIMER_IE);
+
+#ifdef ENABLE_SMP_SUPPORT
+    /* enable the software-generated interrupts */
+    sie |= BIT(SIPI_IE);
+#endif
+
+    set_sie_mask(sie);
+}
+
 BOOT_CODE void initIRQController(void)
 {
     printf("Initialing PLIC...\n");
 
     plic_init_controller();
-    set_sie_mask(BIT(9));
 }
 
 void handleSpuriousIRQ(void)
 {
     /* Do nothing */
-    printf("Superior IRQ!! \n");
+    printf("Superior IRQ!! SIP %lx\n", read_sip());
 }

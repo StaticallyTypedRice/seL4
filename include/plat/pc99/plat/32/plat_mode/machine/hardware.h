@@ -43,15 +43,11 @@
 /* This then marks the end of where physical memory gets mapped */
 #define PPTR_TOP KS_LOG_PPTR
 
-#define PPTR_KDEV   0xffff0000
+#define KDEV_BASE   0xffff0000
 #define BASE_OFFSET (PPTR_BASE - PADDR_BASE)
 #define kernelBase PPTR_USER_TOP
 
 #define PADDR_TOP   (PPTR_TOP - BASE_OFFSET)
-
-/* The maximum physical address for device untypeds that we export to
- * the user */
-#define PADDR_USER_DEVICE_TOP 0xffff0000
 
 /* The kernel base offset is a way to translate the kernel image segment
  * from virtual to physical. This translation must be a single offset for

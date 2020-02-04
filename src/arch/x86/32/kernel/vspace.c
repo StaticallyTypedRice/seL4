@@ -304,9 +304,9 @@ BOOT_CODE bool_t map_kernel_window(
     ia32KSGlobalPT[idx] = pte;
     idx++;
 
-    /* null mappings up to PPTR_KDEV */
+    /* null mappings up to KDEV_BASE */
 
-    while (idx < (PPTR_KDEV &MASK(LARGE_PAGE_BITS)) >> PAGE_BITS) {
+    while (idx < (KDEV_BASE &MASK(LARGE_PAGE_BITS)) >> PAGE_BITS) {
         pte = pte_new(
                   0,      /* page_base_address    */
                   0,      /* avl                  */
@@ -654,8 +654,8 @@ bool_t modeUnmapPage(vm_page_size_t page_size, vspace_root_t *vroot, vptr_t vadd
     return false;
 }
 
-exception_t decodeX86ModeMapRemapPage(word_t invLabel, vm_page_size_t page_size, cte_t *cte, cap_t cap,
-                                      vspace_root_t *vroot, vptr_t vaddr, paddr_t paddr, vm_rights_t vm_rights, vm_attributes_t vm_attr)
+exception_t decodeX86ModeMapPage(word_t invLabel, vm_page_size_t page_size, cte_t *cte, cap_t cap,
+                                 vspace_root_t *vroot, vptr_t vaddr, paddr_t paddr, vm_rights_t vm_rights, vm_attributes_t vm_attr)
 {
     fail("Invalid Page type");
 }

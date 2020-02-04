@@ -33,6 +33,31 @@
 #define KERNEL_BASE UL_CONST(0xFF800000)
 #define KERNEL_ELF_BASE KERNEL_BASE
 /* Start of kernel device mapping region in highest 4MiB of memory. */
-#define KDEV_PPTR UL_CONST(0xFFC00000)
+#define KDEV_BASE UL_CONST(0xFFC00000)
+
+#ifndef __ASSEMBLER__
+
+#include <stdint.h>
+
+static inline uint64_t riscv_read_time(void)
+{
+    uint32_t nH1, nL, nH2;
+    asm volatile(
+        "rdtimeh %0\n"
+        "rdtime  %1\n"
+        "rdtimeh %2\n"
+        : "=r"(nH1), "=r"(nL), "=r"(nH2));
+    if (nH1 < nH2) {
+        /* Ensure that the time is correct if there is a rollover in the
+         * high bits between reading the low and high bits. */
+        asm volatile(
+            "rdtime  %0\n"
+            : "=r"(nL));
+        nH1 = nH2;
+    }
+    return ((uint64_t)((uint64_t) nH1 << 32)) | (nL);
+}
+
+#endif /* __ASSEMBLER__ */
 
 #endif /* __ARCH_MODE_HARDWARE_H */

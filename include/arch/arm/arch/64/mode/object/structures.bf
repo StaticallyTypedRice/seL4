@@ -125,6 +125,10 @@ tagged_union cap capType {
     tag irq_handler_cap             16
     tag zombie_cap                  18
     tag domain_cap                  20
+#ifdef CONFIG_KERNEL_MCS
+    tag sched_context_cap           22
+    tag sched_control_cap           24
+#endif
 
     -- 5-bit tag arch caps
     tag frame_cap                   1
@@ -202,6 +206,13 @@ tagged_union pgde pgde_type {
     tag pgde_pud                    3
 }
 
+block pude_invalid {
+    field stored_hw_asid            8
+    field stored_asid_valid         1
+    padding                         53
+    field pude_type                 2
+}
+
 block pude_1g {
     padding                         9
     field UXN                       1
@@ -229,6 +240,7 @@ block pude_pd {
 }
 
 tagged_union pude pude_type {
+    tag pude_invalid                0
     tag pude_1g                     1
     tag pude_pd                     3
 }

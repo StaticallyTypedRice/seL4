@@ -16,6 +16,11 @@ declare_platform(apq8064 KernelPlatformAPQ8064 PLAT_APQ8064 KernelSel4ArchAarch3
 
 if(KernelPlatformAPQ8064)
     declare_seL4_arch(aarch32)
+
+    # MCS is not supported on apq8064.
+    # It requires a timer driver that implements the tickless programming requirements.
+    set(KernelPlatformSupportsMCS OFF)
+
     set(KernelArmCortexA15 ON)
     set(KernelArchArmV7a ON)
     set(KernelArchArmV7ve ON)
@@ -26,6 +31,7 @@ if(KernelPlatformAPQ8064)
     declare_default_headers(
         TIMER_FREQUENCY 7000000llu
         MAX_IRQ 283
+        NUM_PPI 32
         TIMER drivers/timer/arm_generic.h
         INTERRUPT_CONTROLLER arch/machine/gic_v2.h
     )
