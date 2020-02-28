@@ -95,12 +95,12 @@ void VISIBLE NORETURN c_handle_instruction_fault(void)
 
 void VISIBLE NORETURN c_handle_interrupt(void)
 {
-    NODE_LOCK_IRQ_IF(IDX_TO_IRQ(getActiveIRQ()) != irq_remote_call_ipi);
+    NODE_LOCK_IRQ_IF(IRQT_TO_IRQ(getActiveIRQ()) != irq_remote_call_ipi);
     c_entry_hook();
 
 #ifdef TRACK_KERNEL_ENTRIES
     ksKernelEntry.path = Entry_Interrupt;
-    ksKernelEntry.word = getActiveIRQ();
+    ksKernelEntry.word = IRQT_TO_IRQ(getActiveIRQ());
 #ifdef ENABLE_SMP_SUPPORT
     ksKernelEntry.core = getCurrentCPUIndex();
 #endif
@@ -112,10 +112,18 @@ void VISIBLE NORETURN c_handle_interrupt(void)
 
 void NORETURN slowpath(syscall_t syscall)
 {
+    if (unlikely(syscall < SYSCALL_MIN || syscall > SYSCALL_MAX)) {
 #ifdef TRACK_KERNEL_ENTRIES
-    ksKernelEntry.is_fastpath = 0;
+        ksKernelEntry.path = Entry_UnknownSyscall;
+        /* ksKernelEntry.word word is already set to syscall */
+#endif /* TRACK_KERNEL_ENTRIES */
+        handleUnknownSyscall(syscall);
+    } else {
+#ifdef TRACK_KERNEL_ENTRIES
+        ksKernelEntry.is_fastpath = 0;
 #endif /* TRACK KERNEL ENTRIES */
-    handleSyscall(syscall);
+        handleSyscall(syscall);
+    }
 
     restore_user_context();
     UNREACHABLE();
@@ -149,18 +157,8 @@ void VISIBLE c_handle_syscall(word_t cptr, word_t msgInfo, syscall_t syscall)
     }
 #endif /* CONFIG_FASTPATH */
 
-    if (unlikely(syscall < SYSCALL_MIN || syscall > SYSCALL_MAX)) {
-#ifdef TRACK_KERNEL_ENTRIES
-        ksKernelEntry.path = Entry_UnknownSyscall;
-        /* ksKernelEntry.word word is already set to syscall */
-#endif /* TRACK_KERNEL_ENTRIES */
-        handleUnknownSyscall(syscall);
-        restore_user_context();
-        UNREACHABLE();
-    } else {
-        slowpath(syscall);
-        UNREACHABLE();
-    }
+    slowpath(syscall);
+    UNREACHABLE();
 }
 
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT

@@ -26,6 +26,9 @@
 #include <mode/machine_pl2.h>
 #include <mode/hardware.h>
 
+#define CNTPCT   "cntpct_el0"
+#define CNTV_CTL "cntv_ctl_el0"
+
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
 #define CNT_TVAL "cnthp_tval_el2"
 #define CNT_CVAL "cnthp_cval_el2"
@@ -33,7 +36,7 @@
 #else
 #define CNT_TVAL "cntv_tval_el0"
 #define CNT_CVAL "cntv_cval_el0"
-#define CNT_CTL  "cntv_ctl_el0"
+#define CNT_CTL  CNTV_CTL
 #endif
 #define CNTFRQ   "cntfrq_el0"
 #define CNT_CT   "cntvct_el0"
@@ -372,5 +375,6 @@ static inline word_t ats2e0r(word_t va)
 }
 
 void arch_clean_invalidate_caches(void);
+void arch_clean_invalidate_L1_caches(word_t type);
 
 #endif /* __ARCH_MODE_MACHINE_H */

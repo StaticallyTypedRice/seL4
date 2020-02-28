@@ -74,6 +74,11 @@ enum {
 } seL4_VGICMaintenance_Msg;
 
 enum {
+    seL4_VPPIEvent_IRQ,
+    SEL4_FORCE_LONG_ENUM(seL4_VPPIEvent_Msg),
+} seL4_VPPIEvent_Msg;
+
+enum {
     seL4_VCPUFault_HSR,
     seL4_VCPUFault_Length,
     SEL4_FORCE_LONG_ENUM(seL4_VCPUFault_Msg),
@@ -98,8 +103,6 @@ enum {
     seL4_VCPUReg_TPIDRPRW,
     seL4_VCPUReg_TPIDRURO,
     seL4_VCPUReg_FPEXC,
-    seL4_VCPUReg_CNTV_TVAL,
-    seL4_VCPUReg_CNTV_CTL,
     seL4_VCPUReg_LRsvc,
     seL4_VCPUReg_SPsvc,
     seL4_VCPUReg_LRabt,
@@ -115,11 +118,19 @@ enum {
     seL4_VCPUReg_R10fiq,
     seL4_VCPUReg_R11fiq,
     seL4_VCPUReg_R12fiq,
+#if  CONFIG_MAX_NUM_NODES > 1
+    seL4_VCPUReg_VMPIDR,
+#endif /* CONFIG_MAX_NUM_NODES > 1 */
     seL4_VCPUReg_SPSRsvc,
     seL4_VCPUReg_SPSRabt,
     seL4_VCPUReg_SPSRund,
     seL4_VCPUReg_SPSRirq,
     seL4_VCPUReg_SPSRfiq,
+    seL4_VCPUReg_CNTV_CTL,
+    seL4_VCPUReg_CNTV_CVALhigh,
+    seL4_VCPUReg_CNTV_CVALlow,
+    seL4_VCPUReg_CNTVOFFhigh,
+    seL4_VCPUReg_CNTVOFFlow,
     seL4_VCPUReg_Num,
 } seL4_VCPUReg;
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
@@ -196,9 +207,6 @@ enum {
 #define seL4_PageTableIndexBits 9
 #define seL4_SectionBits 21
 #define seL4_SuperSectionBits 25
-#define seL4_PGDEntryBits 3
-#define seL4_PGDIndexBits 2
-#define seL4_PGDBits 5
 #define seL4_PageDirEntryBits 3
 #define seL4_PageDirIndexBits 11
 #define seL4_VCPUBits 12

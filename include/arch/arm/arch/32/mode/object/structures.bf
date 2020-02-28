@@ -215,6 +215,12 @@ block VCPUFault {
     padding         28
     field seL4_FaultType  4
 }
+
+block VPPIEvent {
+    field irq_w     10
+    padding         50
+    field seL4_FaultType  4
+}
 #endif
 
 ---- ARM-specific object types

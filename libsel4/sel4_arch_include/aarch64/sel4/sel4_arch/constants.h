@@ -69,6 +69,12 @@ enum {
 } seL4_VGICMaintenance_Msg;
 
 enum {
+    seL4_VPPIEvent_IRQ,
+    SEL4_FORCE_LONG_ENUM(seL4_VPPIEvent_Msg),
+} seL4_VPPIEvent_Msg;
+
+
+enum {
     seL4_VCPUFault_HSR,
     seL4_VCPUFault_Length,
     SEL4_FORCE_LONG_ENUM(seL4_VCPUFault_Msg),
@@ -99,15 +105,21 @@ enum {
     /* thread pointer/ID registers EL0/EL1 */
     seL4_VCPUReg_TPIDR_EL1,
 
-    /* generic timer registers, to be completed */
-    seL4_VCPUReg_CNTV_CTL,
-    seL4_VCPUReg_CNTV_TVAL,
-    seL4_VCPUReg_CNTV_CVAL,
+#if CONFIG_MAX_NUM_NODES > 1
+    /* Virtualisation Multiprocessor ID Register */
+    seL4_VCPUReg_VMPIDR_EL2,
+#endif /* CONFIG_MAX_NUM_NODES > 1 */
 
     /* general registers x0 to x30 have been saved by traps.S */
     seL4_VCPUReg_SP_EL1,
     seL4_VCPUReg_ELR_EL1,
     seL4_VCPUReg_SPSR_EL1, // 32-bit
+
+    /* generic timer registers, to be completed */
+    seL4_VCPUReg_CNTV_CTL,
+    seL4_VCPUReg_CNTV_CVAL,
+    seL4_VCPUReg_CNTVOFF,
+
     seL4_VCPUReg_Num,
 } seL4_VCPUReg;
 
